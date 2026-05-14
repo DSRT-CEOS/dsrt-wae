@@ -1,87 +1,193 @@
+﻿"use client";
+
 // ============================================
-// DSRT WAE — Main Dashboard Page
-// 
-// RIGHT NOW: Shows placeholder/initializing screen
-// DAY 5: Will show real live data
+// DSRT WAE — MAIN DASHBOARD
+// Connects to live API, auto-refreshes
 // ============================================
 
-export default function DashboardPage() {
+import { useState, useEffect, useCallback } from "react";
+import Header from "./components/Header";
+import GlobalStats from "./components/GlobalStats";
+import AIBriefing from "./components/AIBriefing";
+import LiveFeed from "./components/LiveFeed";
+
+const REFRESH_INTERVAL = 60000; // 60 seconds
+
+export default function Dashboard() {
+  const [events, setEvents] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [cycle, setCycle] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const [status, setStatus] = useState("loading");
+  const [error, setError] = useState(null);
+
+  // Fetch all data from API
+  const fetchData = useCallback(async () => {
+    try {
+      setError(null);
+
+      const [eventsRes, statsRes, cycleRes] = await Promise.allSettled([
+        fetch("/api/events?type=latest&limit=100"),
+        fetch("/api/events?type=stats"),
+        fetch("/api/events?type=cycle"),
+      ]);
+
+      if (eventsRes.status === "fulfilled" && eventsRes.value.ok) {
+        const json = await eventsRes.value.json();
+        setEvents(json.data || []);
+      }
+
+      if (statsRes.status === "fulfilled" && statsRes.value.ok) {
+        const json = await statsRes.value.json();
+        setStats(json.data || null);
+      }
+
+      if (cycleRes.status === "fulfilled" && cycleRes.value.ok) {
+        const json = await cycleRes.value.json();
+        setCycle(json.data || null);
+      }
+
+      setLastRefresh(new Date());
+      setStatus("operational");
+    } catch (err) {
+      console.error("Fetch error:", err);
+      setError(err.message);
+      setStatus("error");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Initial fetch + auto-refresh
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, REFRESH_INTERVAL);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
   return (
-    <div className="min-h-screen bg-[#030712] flex flex-col">
+    <div style={{ minHeight: "100vh", backgroundColor: "#030712" }}>
+      <Header
+        lastRefresh={lastRefresh}
+        status={status}
+        onRefresh={fetchData}
+      />
 
-      {/* ── INITIALIZING SCREEN ── */}
-      <div className="flex-1 flex flex-col items-center justify-center">
-
-        {/* Globe Icon */}
-        <div className="text-8xl mb-6 animate-spin" 
-             style={{ animationDuration: "8s" }}>
-          🌍
-        </div>
-
-        {/* System Name */}
-        <h1 className="text-4xl font-bold tracking-widest mb-2 text-white">
-          DSRT{" "}
-          <span className="text-blue-400">WAE</span>
-        </h1>
-
-        {/* Full Name */}
-        <p className="text-xs tracking-widest text-gray-500 uppercase mb-8">
-          Deep Strategic Real-Time World AI Engine
-        </p>
-
-        {/* Initializing Text */}
-        <div className="border border-green-800 bg-green-950/20 
-                        rounded px-8 py-4 text-center max-w-md">
-          <p className="text-green-400 text-sm font-mono mb-2">
-            ● SYSTEM INITIALIZING...
-          </p>
-          <p className="text-gray-500 text-xs leading-relaxed">
-            Building intelligence pipeline.<br />
-            Connecting to global data sources.<br />
-            Stand by for world monitoring activation.
-          </p>
-        </div>
-
-        {/* Version */}
-        <p className="text-gray-700 text-xs mt-8">
-          V1.0 — BUILD PHASE
-        </p>
-
-        {/* What's coming */}
-        <div className="mt-12 grid grid-cols-2 gap-3 text-xs text-gray-600 
-                        max-w-sm w-full">
-          {[
-            { icon: "📡", text: "GDELT Source" },
-            { icon: "📰", text: "RSS Feeds" },
-            { icon: "🤖", text: "AI Analysis" },
-            { icon: "🌡️", text: "Heat Scoring" },
-            { icon: "🗄️", text: "Live Database" },
-            { icon: "⚡", text: "30min Updates" },
-          ].map((item) => (
-            <div 
-              key={item.text}
-              className="flex items-center gap-2 
-                         bg-gray-900/50 border border-gray-800 
-                         rounded px-3 py-2"
-            >
-              <span>{item.icon}</span>
-              <span>{item.text}</span>
+      <main style={{
+        maxWidth: "1400px",
+        margin: "0 auto",
+        padding: "24px 20px",
+      }}>
+        {/* Loading state */}
+        {loading && events.length === 0 && (
+          <div style={{
+            textAlign: "center",
+            padding: "80px 20px",
+          }}>
+            <div style={{
+              fontSize: "60px",
+              animation: "spin 8s linear infinite",
+              marginBottom: "20px",
+            }}>
+              🌍
             </div>
-          ))}
-        </div>
-      </div>
+            <p style={{ color: "#94A3B8", fontSize: "14px" }}>
+              Connecting to global intelligence network...
+            </p>
+            <p style={{ color: "#475569", fontSize: "11px", marginTop: "8px" }}>
+              Loading real-time world data
+            </p>
+          </div>
+        )}
 
-      {/* ── BOTTOM STATUS BAR ── */}
-      <div className="border-t border-gray-800 px-6 py-3 
-                      flex items-center justify-between text-xs text-gray-600">
-        <span>DSRT WAE v1.0</span>
-        <span className="flex items-center gap-2">
-          <span className="live-dot"></span>
-          SYSTEM BUILD IN PROGRESS
-        </span>
-        <span>Day 1 of 7</span>
-      </div>
+        {/* Error banner */}
+        {error && (
+          <div style={{
+            backgroundColor: "rgba(127, 29, 29, 0.3)",
+            border: "1px solid #7F1D1D",
+            borderRadius: "8px",
+            padding: "12px 16px",
+            marginBottom: "20px",
+            color: "#FCA5A5",
+            fontSize: "13px",
+          }}>
+            ⚠️ System Error: {error}
+          </div>
+        )}
 
+        {/* Empty state - no data yet */}
+        {!loading && events.length === 0 && !error && (
+          <div style={{
+            textAlign: "center",
+            padding: "60px 20px",
+          }}>
+            <div style={{ fontSize: "50px", marginBottom: "16px" }}>📡</div>
+            <h2 style={{ color: "#E2E8F0", fontSize: "16px", marginBottom: "8px" }}>
+              No Events Yet
+            </h2>
+            <p style={{ color: "#94A3B8", fontSize: "13px", marginBottom: "16px" }}>
+              The engine hasn't run yet, or no events were collected.
+            </p>
+            <a
+              href="/api/cron?secret=dsrt-wae-secret-2024"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-block",
+                padding: "10px 20px",
+                backgroundColor: "#3B82F6",
+                color: "white",
+                textDecoration: "none",
+                borderRadius: "6px",
+                fontSize: "13px",
+              }}
+            >
+              ⚡ Trigger Engine Cycle
+            </a>
+          </div>
+        )}
+
+        {/* Main content - has data */}
+        {events.length > 0 && (
+          <>
+            <GlobalStats stats={stats} cycle={cycle} />
+            <AIBriefing cycle={cycle} />
+            <LiveFeed events={events} />
+          </>
+        )}
+      </main>
+
+      <footer style={{
+        borderTop: "1px solid #1E293B",
+        marginTop: "40px",
+        padding: "20px",
+        textAlign: "center",
+        color: "#475569",
+        fontSize: "11px",
+      }}>
+        <p style={{ margin: 0 }}>
+          DSRT WAE v1.0 — Deep Strategic Real-Time World AI Engine
+        </p>
+        <p style={{ marginTop: "4px", margin: 0 }}>
+          Sources: GDELT • 18 Global RSS Feeds • AI: LLaMA 3 via Groq
+        </p>
+      </footer>
+
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.2; }
+        }
+        @keyframes pulse-critical {
+          0%, 100% { text-shadow: 0 0 0 rgba(255, 0, 0, 0); }
+          50% { text-shadow: 0 0 12px rgba(255, 0, 0, 0.8); }
+        }
+      `}</style>
     </div>
   );
 }
