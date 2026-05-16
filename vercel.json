@@ -1,15 +1,3 @@
 ﻿{
-  "version": 2,
-  "framework": "nextjs",
-  "functions": {
-    "app/api/cron/route.js": {
-      "maxDuration": 60
-    },
-    "app/api/events/route.js": {
-      "maxDuration": 15
-    },
-    "app/api/health/route.js": {
-      "maxDuration": 10
-    }
-  }
+  "version": 2
 }
