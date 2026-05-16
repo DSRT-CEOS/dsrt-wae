@@ -1,7 +1,5 @@
 ﻿// ============================================
-// DSRT WAE — DATABASE QUERIES
-// All database operations live here
-// Keeps engine/API code clean
+// DSRT WAE — DATABASE QUERIES (V2 — Fixed)
 // ============================================
 
 import supabase from "./client.js";
@@ -13,7 +11,6 @@ const MOD = "DATABASE";
 // EVENT OPERATIONS
 // ─────────────────────────────────────────────
 
-// Insert events with deduplication via content_hash
 export async function insertEvents(events) {
   if (!events || events.length === 0) {
     logger.warn(MOD, "insertEvents called with no events");
@@ -21,25 +18,51 @@ export async function insertEvents(events) {
   }
 
   try {
+    // Strip fields not in DB schema
+    const cleanEvents = events.map(e => ({
+      title: e.title,
+      summary: e.summary || null,
+      content: e.content || null,
+      url: e.url || null,
+      image_url: e.image_url || null,
+      category: e.category || "general",
+      region: e.region || "Global",
+      heat_score: e.heat_score || 5.0,
+      source_module: e.source_module,
+      source_name: e.source_name || null,
+      source_url: e.source_url || null,
+      content_hash: e.content_hash,
+      countries: e.countries || [],
+      entities: e.entities || [],
+      keywords: e.keywords || [],
+      published_at: e.published_at || null,
+      processed_at: e.processed_at || null,
+      status: e.status || "raw",
+      cycle_id: e.cycle_id || null,
+    }));
+
+    // Use upsert WITHOUT ignoreDuplicates so it returns data
     const { data, error } = await supabase
       .from("wae_events")
-      .upsert(events, {
+      .upsert(cleanEvents, {
         onConflict: "content_hash",
-        ignoreDuplicates: true,
+        ignoreDuplicates: false, // ← critical change
       })
       .select();
 
-    if (error) throw error;
+    if (error) {
+      logger.error(MOD, "insertEvents error", error);
+      return [];
+    }
 
-    logger.info(MOD, `Inserted ${data?.length || 0} new events`);
+    logger.info(MOD, `Upserted ${data?.length || 0} events`);
     return data || [];
   } catch (err) {
-    logger.error(MOD, "insertEvents failed", err.message);
+    logger.error(MOD, "insertEvents exception", err.message);
     return [];
   }
 }
 
-// Get latest events with optional category filter
 export async function getLatestEvents(limit = 50, category = null) {
   try {
     let query = supabase
@@ -54,7 +77,6 @@ export async function getLatestEvents(limit = 50, category = null) {
 
     const { data, error } = await query;
     if (error) throw error;
-
     return data || [];
   } catch (err) {
     logger.error(MOD, "getLatestEvents failed", err.message);
@@ -62,7 +84,6 @@ export async function getLatestEvents(limit = 50, category = null) {
   }
 }
 
-// Get only HOT events (heat >= threshold)
 export async function getHotEvents(minHeat = 7, limit = 20) {
   try {
     const { data, error } = await supabase
@@ -71,7 +92,6 @@ export async function getHotEvents(minHeat = 7, limit = 20) {
       .gte("heat_score", minHeat)
       .order("heat_score", { ascending: false })
       .limit(limit);
-
     if (error) throw error;
     return data || [];
   } catch (err) {
@@ -80,7 +100,6 @@ export async function getHotEvents(minHeat = 7, limit = 20) {
   }
 }
 
-// Get events from a specific region
 export async function getEventsByRegion(region, limit = 30) {
   try {
     const { data, error } = await supabase
@@ -89,7 +108,6 @@ export async function getEventsByRegion(region, limit = 30) {
       .eq("region", region)
       .order("heat_score", { ascending: false })
       .limit(limit);
-
     if (error) throw error;
     return data || [];
   } catch (err) {
@@ -102,18 +120,13 @@ export async function getEventsByRegion(region, limit = 30) {
 // CYCLE OPERATIONS
 // ─────────────────────────────────────────────
 
-// Create new cycle when engine starts
 export async function createCycle(cycleId) {
   try {
     const { data, error } = await supabase
       .from("wae_cycles")
-      .insert({
-        id: cycleId,
-        status: "running",
-      })
+      .insert({ id: cycleId, status: "running" })
       .select()
       .single();
-
     if (error) throw error;
     logger.info(MOD, `Created cycle: ${cycleId}`);
     return data;
@@ -123,7 +136,6 @@ export async function createCycle(cycleId) {
   }
 }
 
-// Mark cycle complete with final stats
 export async function completeCycle(cycleId, stats) {
   try {
     const { data, error } = await supabase
@@ -136,7 +148,6 @@ export async function completeCycle(cycleId, stats) {
       .eq("id", cycleId)
       .select()
       .single();
-
     if (error) throw error;
     logger.info(MOD, `Completed cycle: ${cycleId}`);
     return data;
@@ -146,7 +157,6 @@ export async function completeCycle(cycleId, stats) {
   }
 }
 
-// Get most recent cycle (for dashboard "Last Updated")
 export async function getLatestCycle() {
   try {
     const { data, error } = await supabase
@@ -155,9 +165,7 @@ export async function getLatestCycle() {
       .order("started_at", { ascending: false })
       .limit(1)
       .single();
-
     if (error) {
-      // No cycles yet is not an error
       if (error.code === "PGRST116") return null;
       throw error;
     }
@@ -168,7 +176,6 @@ export async function getLatestCycle() {
   }
 }
 
-// Get history of last N cycles
 export async function getCycleHistory(limit = 10) {
   try {
     const { data, error } = await supabase
@@ -176,7 +183,6 @@ export async function getCycleHistory(limit = 10) {
       .select("*")
       .order("started_at", { ascending: false })
       .limit(limit);
-
     if (error) throw error;
     return data || [];
   } catch (err) {
@@ -186,34 +192,29 @@ export async function getCycleHistory(limit = 10) {
 }
 
 // ─────────────────────────────────────────────
-// STATISTICS / AGGREGATIONS
+// STATISTICS
 // ─────────────────────────────────────────────
 
-// Get system-wide statistics
 export async function getStats() {
   try {
     const now = new Date();
     const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
     const oneHourAgo = new Date(now - 60 * 60 * 1000).toISOString();
 
-    // Total events ever
     const { count: totalEvents } = await supabase
       .from("wae_events")
       .select("*", { count: "exact", head: true });
 
-    // Events in last 24h
     const { count: last24h } = await supabase
       .from("wae_events")
       .select("*", { count: "exact", head: true })
       .gte("ingested_at", oneDayAgo);
 
-    // Events in last hour
     const { count: lastHour } = await supabase
       .from("wae_events")
       .select("*", { count: "exact", head: true })
       .gte("ingested_at", oneHourAgo);
 
-    // Average heat in last 24h
     const { data: heatData } = await supabase
       .from("wae_events")
       .select("heat_score")
@@ -223,7 +224,6 @@ export async function getStats() {
       ? (heatData.reduce((a, b) => a + parseFloat(b.heat_score), 0) / heatData.length).toFixed(1)
       : 0;
 
-    // Hot events count (heat >= 7) in last 24h
     const { count: hotCount } = await supabase
       .from("wae_events")
       .select("*", { count: "exact", head: true })
@@ -249,23 +249,18 @@ export async function getStats() {
   }
 }
 
-// Get category distribution (for stats)
 export async function getCategoryBreakdown() {
   try {
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
     const { data, error } = await supabase
       .from("wae_events")
       .select("category")
       .gte("ingested_at", oneDayAgo);
-
     if (error) throw error;
-
     const breakdown = {};
     (data || []).forEach(e => {
       breakdown[e.category] = (breakdown[e.category] || 0) + 1;
     });
-
     return breakdown;
   } catch (err) {
     logger.error(MOD, "getCategoryBreakdown failed", err.message);
