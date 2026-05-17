@@ -49,7 +49,12 @@ export async function POST(request, { params }) {
     }
     
     // Fetch fresh data
-    const quote = await fetchQuote(company.ticker, company.exchange);
+    let quote = null;
+    try {
+      quote = await fetchQuote(company.ticker, company.exchange);
+    } catch (fetchErr) {
+      console.error("[REFRESH] Yahoo fetch error for", company.ticker, fetchErr.message);
+    }
     
     if (!quote) {
       return NextResponse.json({ success: false, error: "Failed to fetch quote" });

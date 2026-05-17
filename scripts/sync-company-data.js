@@ -166,6 +166,7 @@ async function syncCompany(company, includeHistory = false) {
       change_pct: quote?.change_percent?.toFixed(2),
       pe: stats?.pe_ratio?.toFixed(2),
       analyst_target: stats?.target_mean,
+      currency: quote?.currency,
       history_bars: historyCount,
     };
   } catch (err) {
@@ -210,7 +211,8 @@ async function syncAll() {
       success++;
       totalHistoryBars += result.history_bars || 0;
       const historyTag = result.history_bars ? `| ${result.history_bars} bars` : "";
-      console.log(`OK | $${result.price || "—"} | ${result.change_pct || "—"}% | PE ${result.pe || "—"} | Target $${result.analyst_target || "—"} ${historyTag}`);
+      const sym = result.currency === "INR" ? "₹" : result.currency === "EUR" ? "€" : result.currency === "GBP" ? "£" : result.currency === "JPY" ? "¥" : "$";
+      console.log(`OK | ${sym}${result.price || "—"} | ${result.change_pct || "—"}% | PE ${result.pe || "—"} | Target ${sym}${result.analyst_target || "—"} ${historyTag}`);
     } else {
       failed++;
       console.log(`FAIL: ${result.reason}`);

@@ -1,6 +1,5 @@
 ﻿// ============================================
-// LINKING CRON — Runs separately from engine
-// Links recent unlinked high-heat events
+// LINKING CRON v1.1 — Reduced batch + faster
 // ============================================
 
 import { NextResponse } from "next/server";
@@ -20,9 +19,10 @@ export async function GET(request) {
   }
 
   const startTime = Date.now();
+  const MAX_DURATION_MS = 50000; // Stop at 50s to avoid timeout
   
   try {
-    // Find recent events that have NO links yet (heat >= 6)
+    // Last 6 hours, heat >= 6
     const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
     
     const { data: events } = await supabase
@@ -31,17 +31,17 @@ export async function GET(request) {
       .gte("heat_score", 6)
       .gte("ingested_at", since)
       .order("heat_score", { ascending: false })
-      .limit(15); // Max 15 events per run (LLM rate limits)
+      .limit(30);
 
     if (!events || events.length === 0) {
       return NextResponse.json({ 
         status: "success", 
-        message: "No new high-heat events to link",
+        message: "No high-heat events to process",
         duration: "0s",
       });
     }
 
-    // Check which already have links
+    // Filter out already-linked ones
     const eventIds = events.map(e => e.id);
     const { data: existingLinks } = await supabase
       .from("wae_event_company_links")
@@ -59,16 +59,42 @@ export async function GET(request) {
       });
     }
 
-    const result = await linkEvents(unlinkedEvents);
+    // Process ONE event at a time, stop when approaching timeout
+    let linked = 0;
+    let totalLinks = 0;
+    let processed = 0;
+    const { linkEvent } = await import("../../../../modules/processing/linker.js");
+    
+    for (const event of unlinkedEvents) {
+      // Check time budget BEFORE next LLM call
+      const elapsed = Date.now() - startTime;
+      if (elapsed > MAX_DURATION_MS) {
+        break; // Stop before timeout
+      }
+      
+      try {
+        const matches = await linkEvent(event);
+        processed++;
+        if (matches.length > 0) {
+          linked++;
+          totalLinks += matches.length;
+        }
+      } catch (err) {
+        // Continue on individual errors
+        processed++;
+      }
+    }
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     
     return NextResponse.json({
       status: "success",
       duration: duration + "s",
-      events_processed: unlinkedEvents.length,
-      events_linked: result.linked,
-      total_links: result.totalLinks,
+      events_available: unlinkedEvents.length,
+      events_processed: processed,
+      events_linked: linked,
+      total_links: totalLinks,
+      remaining: unlinkedEvents.length - processed,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {

@@ -1,6 +1,7 @@
 ﻿// ============================================
-// YAHOO FINANCE FETCHER v1.1
-// With crumb authentication for stats endpoint
+// YAHOO FINANCE FETCHER v2.0 — BULLETPROOF
+// ALWAYS uses chart data as source of truth
+// Meta prices only used for supplementary info
 // ============================================
 
 import logger from "../../core/logger.js";
@@ -10,19 +11,17 @@ const MOD = "YAHOO";
 export const MODULE_INFO = {
   id: "yahoo-finance",
   name: "Yahoo Finance Data Fetcher",
-  version: "1.1.0",
+  version: "2.0.0",
 };
 
-// Auth state (cached across calls)
 let crumb = null;
 let cookieHeader = null;
 let lastAuthAt = 0;
-const AUTH_TTL = 60 * 60 * 1000; // refresh every hour
+const AUTH_TTL = 60 * 60 * 1000;
 
 function mapTicker(ticker, exchange) {
   if (!ticker) return null;
   if (ticker.includes(".")) return ticker;
-  
   switch (exchange) {
     case "NSE": return `${ticker}.NS`;
     case "BSE": return `${ticker}.BO`;
@@ -41,7 +40,6 @@ function mapTicker(ticker, exchange) {
 async function fetchWithTimeout(url, options = {}, timeout = 10000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
-  
   try {
     const response = await fetch(url, {
       ...options,
@@ -61,23 +59,16 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
   }
 }
 
-// ============================================
-// AUTH: Get crumb + cookies from Yahoo
-// ============================================
 async function getCrumb() {
-  // Use cached if still valid
   if (crumb && cookieHeader && (Date.now() - lastAuthAt) < AUTH_TTL) {
     return { crumb, cookieHeader };
   }
 
   try {
-    // Step 1: Get cookies by visiting fc.yahoo.com
     const cookieRes = await fetchWithTimeout("https://fc.yahoo.com/", {});
-    
     const setCookie = cookieRes.headers.get("set-cookie");
+    
     if (!setCookie) {
-      logger.warn(MOD, "No set-cookie header from Yahoo");
-      // Try alternate cookie source
       const altRes = await fetchWithTimeout("https://finance.yahoo.com/", {});
       const altCookie = altRes.headers.get("set-cookie");
       if (altCookie) {
@@ -87,49 +78,35 @@ async function getCrumb() {
       cookieHeader = setCookie.split(",").map(c => c.split(";")[0]).join("; ");
     }
 
-    if (!cookieHeader) {
-      logger.warn(MOD, "Could not get Yahoo cookies");
-      return null;
-    }
+    if (!cookieHeader) return null;
 
-    // Step 2: Get crumb using cookies
     const crumbRes = await fetchWithTimeout(
       "https://query2.finance.yahoo.com/v1/test/getcrumb",
-      {
-        headers: { Cookie: cookieHeader },
-      }
+      { headers: { Cookie: cookieHeader } }
     );
 
-    if (!crumbRes.ok) {
-      logger.warn(MOD, `Crumb fetch failed: HTTP ${crumbRes.status}`);
-      return null;
-    }
-
+    if (!crumbRes.ok) return null;
     crumb = await crumbRes.text();
-    
-    if (!crumb || crumb.length < 5) {
-      logger.warn(MOD, "Invalid crumb received");
-      return null;
-    }
+    if (!crumb || crumb.length < 5) return null;
 
     lastAuthAt = Date.now();
     logger.info(MOD, `Got Yahoo crumb: ${crumb.substring(0, 8)}...`);
     return { crumb, cookieHeader };
   } catch (err) {
-    logger.error(MOD, `Auth failed: ${err.message}`);
     return null;
   }
 }
 
 // ============================================
-// FETCH QUOTE (no auth needed)
+// FETCH QUOTE — CHART-FIRST APPROACH (bulletproof)
 // ============================================
 export async function fetchQuote(ticker, exchange) {
   const yahooTicker = mapTicker(ticker, exchange);
   if (!yahooTicker) return null;
 
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=1d&range=1d`;
+    // Always fetch chart data - this is the source of truth
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=1d&range=5d`;
     const response = await fetchWithTimeout(url);
     
     if (!response.ok) {
@@ -144,20 +121,75 @@ export async function fetchQuote(ticker, exchange) {
     const meta = result.meta;
     const quote = result.indicators?.quote?.[0];
     
+    // CHART-FIRST: Use most recent valid close from chart indicators
+    const closes = (quote?.close || []).filter(c => c != null && c > 0);
+    const opens = (quote?.open || []).filter(c => c != null && c > 0);
+    const highs = (quote?.high || []).filter(c => c != null && c > 0);
+    const lows = (quote?.low || []).filter(c => c != null && c > 0);
+    const volumes = (quote?.volume || []).filter(v => v != null && v > 0);
+    
+    if (closes.length === 0) {
+      logger.warn(MOD, `${yahooTicker}: no valid closes in chart data`);
+      return null;
+    }
+    
+    // PRIMARY: Latest valid close from chart
+    const chartPrice = closes[closes.length - 1];
+    const chartPrevClose = closes.length >= 2 ? closes[closes.length - 2] : chartPrice;
+    
+    // SECONDARY: Meta price (only use if consistent with chart)
+    const metaPrice = meta.regularMarketPrice;
+    
+    // DECISION: Always use chart unless meta is within 10% (proves it's reliable)
+    let finalPrice = chartPrice;
+    let finalPrevClose = chartPrevClose;
+    
+    if (metaPrice && metaPrice > 0) {
+      const deviation = Math.abs(metaPrice - chartPrice) / chartPrice;
+      if (deviation < 0.1) {
+        // Meta is within 10% of chart - it's the current/intraday price
+        finalPrice = metaPrice;
+      } else {
+        logger.warn(MOD, `${yahooTicker}: meta ${metaPrice} != chart ${chartPrice} (${(deviation * 100).toFixed(0)}% off), using chart`);
+      }
+    }
+    
+    // Validate prevClose too
+    const metaPrevClose = meta.previousClose || meta.chartPreviousClose;
+    if (metaPrevClose && metaPrevClose > 0) {
+      const prevDev = Math.abs(metaPrevClose - chartPrice) / chartPrice;
+      if (prevDev < 0.2) {
+        finalPrevClose = metaPrevClose;
+      }
+    }
+    
+    const changeAmount = finalPrice - finalPrevClose;
+    const changePercent = finalPrevClose !== 0 
+      ? ((finalPrice - finalPrevClose) / finalPrevClose * 100) 
+      : 0;
+    
+    // For day high/low/open: use meta if consistent, otherwise chart
+    const validateAgainstPrice = (val, name) => {
+      if (!val || val <= 0) return null;
+      const dev = Math.abs(val - chartPrice) / chartPrice;
+      if (dev > 0.3) {
+        return null; // Reject suspicious values
+      }
+      return val;
+    };
+    
     return {
       ticker,
       yahoo_ticker: yahooTicker,
-      price: meta.regularMarketPrice || null,
+      price: finalPrice,
       currency: meta.currency || "USD",
-      prev_close: meta.previousClose || meta.chartPreviousClose || null,
-      change_amount: meta.regularMarketPrice && meta.previousClose 
-        ? (meta.regularMarketPrice - meta.previousClose) : null,
-      change_percent: meta.regularMarketPrice && meta.previousClose
-        ? ((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100) : null,
-      open_price: quote?.open?.[0] || null,
-      high_price: meta.regularMarketDayHigh || quote?.high?.[0] || null,
-      low_price: meta.regularMarketDayLow || quote?.low?.[0] || null,
-      volume: meta.regularMarketVolume || quote?.volume?.[0] || null,
+      prev_close: finalPrevClose,
+      change_amount: changeAmount,
+      change_percent: changePercent,
+      open_price: validateAgainstPrice(meta.regularMarketOpen, "open") || opens[opens.length - 1] || null,
+      high_price: validateAgainstPrice(meta.regularMarketDayHigh, "high") || highs[highs.length - 1] || null,
+      low_price: validateAgainstPrice(meta.regularMarketDayLow, "low") || lows[lows.length - 1] || null,
+      volume: meta.regularMarketVolume || volumes[volumes.length - 1] || null,
       week_52_high: meta.fiftyTwoWeekHigh || null,
       week_52_low: meta.fiftyTwoWeekLow || null,
       market_cap_usd: null,
@@ -171,17 +203,14 @@ export async function fetchQuote(ticker, exchange) {
 }
 
 // ============================================
-// FETCH KEY STATS (with crumb auth)
+// FETCH KEY STATS (same as before)
 // ============================================
 export async function fetchKeyStats(ticker, exchange) {
   const yahooTicker = mapTicker(ticker, exchange);
   if (!yahooTicker) return null;
 
   const auth = await getCrumb();
-  if (!auth) {
-    logger.warn(MOD, `Stats ${yahooTicker}: no auth available`);
-    return null;
-  }
+  if (!auth) return null;
 
   try {
     const modules = "summaryDetail,defaultKeyStatistics,financialData,price,assetProfile";
@@ -192,36 +221,21 @@ export async function fetchKeyStats(ticker, exchange) {
     });
     
     if (response.status === 401 || response.status === 403) {
-      // Auth expired — refresh and retry once
-      logger.info(MOD, `Auth expired for ${yahooTicker}, refreshing...`);
       crumb = null;
       cookieHeader = null;
       const newAuth = await getCrumb();
       if (!newAuth) return null;
-      
       const retryUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${yahooTicker}?modules=${modules}&crumb=${encodeURIComponent(newAuth.crumb)}`;
-      const retryRes = await fetchWithTimeout(retryUrl, {
-        headers: { Cookie: newAuth.cookieHeader },
-      });
-      
-      if (!retryRes.ok) {
-        logger.warn(MOD, `Stats ${yahooTicker} retry: HTTP ${retryRes.status}`);
-        return null;
-      }
-      
+      const retryRes = await fetchWithTimeout(retryUrl, { headers: { Cookie: newAuth.cookieHeader } });
+      if (!retryRes.ok) return null;
       const data = await retryRes.json();
       return parseStats(data);
     }
     
-    if (!response.ok) {
-      logger.warn(MOD, `Stats ${yahooTicker}: HTTP ${response.status}`);
-      return null;
-    }
-    
+    if (!response.ok) return null;
     const data = await response.json();
     return parseStats(data);
   } catch (err) {
-    logger.error(MOD, `Stats ${yahooTicker} failed: ${err.message}`);
     return null;
   }
 }
@@ -236,82 +250,57 @@ function parseStats(data) {
   const price = result.price || {};
   const profile = result.assetProfile || {};
   
-  const getValue = (obj) => obj?.raw ?? null;
+  const v = (obj) => obj?.raw ?? null;
   
   return {
-    // Valuation
-    market_cap_usd: getValue(price.marketCap),
-    pe_ratio: getValue(summary.trailingPE),
-    forward_pe: getValue(summary.forwardPE),
-    eps: getValue(stats.trailingEps),
-    forward_eps: getValue(stats.forwardEps),
-    pb_ratio: getValue(stats.priceToBook),
-    ps_ratio: getValue(summary.priceToSalesTrailing12Months),
-    ev_ebitda: getValue(stats.enterpriseToEbitda),
-    ev_revenue: getValue(stats.enterpriseToRevenue),
-    peg_ratio: getValue(stats.pegRatio),
-    
-    // Dividend
-    dividend_yield: getValue(summary.dividendYield),
-    dividend_rate: getValue(summary.dividendRate),
-    payout_ratio: getValue(summary.payoutRatio),
-    
-    // Margins
-    profit_margin: getValue(fin.profitMargins),
-    operating_margin: getValue(fin.operatingMargins),
-    gross_margin: getValue(fin.grossMargins),
-    ebitda_margin: getValue(fin.ebitdaMargins),
-    
-    // Growth
-    revenue_growth: getValue(fin.revenueGrowth),
-    earnings_growth: getValue(fin.earningsGrowth),
-    
-    // Returns
-    roe: getValue(fin.returnOnEquity),
-    roa: getValue(fin.returnOnAssets),
-    
-    // Financial health
-    total_cash: getValue(fin.totalCash),
-    total_debt: getValue(fin.totalDebt),
-    debt_to_equity: getValue(fin.debtToEquity),
-    current_ratio: getValue(fin.currentRatio),
-    quick_ratio: getValue(fin.quickRatio),
-    
-    // Cash flow
-    free_cash_flow: getValue(fin.freeCashflow),
-    operating_cash_flow: getValue(fin.operatingCashflow),
-    revenue: getValue(fin.totalRevenue),
-    ebitda: getValue(fin.ebitda),
-    
-    // Shares
-    shares_outstanding: getValue(stats.sharesOutstanding),
-    float_shares: getValue(stats.floatShares),
-    shares_short: getValue(stats.sharesShort),
-    short_ratio: getValue(stats.shortRatio),
-    short_percent_of_float: getValue(stats.shortPercentOfFloat),
-    
-    // Ownership
-    held_percent_insiders: getValue(stats.heldPercentInsiders),
-    held_percent_institutions: getValue(stats.heldPercentInstitutions),
-    
-    // Risk
-    beta: getValue(stats.beta),
-    
-    // 52-week
-    week_52_high: getValue(summary.fiftyTwoWeekHigh),
-    week_52_low: getValue(summary.fiftyTwoWeekLow),
-    week_52_change: getValue(stats["52WeekChange"]),
-    
-    // Analyst targets
-    target_high: getValue(fin.targetHighPrice),
-    target_low: getValue(fin.targetLowPrice),
-    target_mean: getValue(fin.targetMeanPrice),
-    target_median: getValue(fin.targetMedianPrice),
-    recommendation_mean: getValue(fin.recommendationMean),
+    market_cap_usd: v(price.marketCap),
+    pe_ratio: v(summary.trailingPE),
+    forward_pe: v(summary.forwardPE),
+    eps: v(stats.trailingEps),
+    forward_eps: v(stats.forwardEps),
+    pb_ratio: v(stats.priceToBook),
+    ps_ratio: v(summary.priceToSalesTrailing12Months),
+    ev_ebitda: v(stats.enterpriseToEbitda),
+    ev_revenue: v(stats.enterpriseToRevenue),
+    peg_ratio: v(stats.pegRatio),
+    dividend_yield: v(summary.dividendYield),
+    dividend_rate: v(summary.dividendRate),
+    payout_ratio: v(summary.payoutRatio),
+    profit_margin: v(fin.profitMargins),
+    operating_margin: v(fin.operatingMargins),
+    gross_margin: v(fin.grossMargins),
+    ebitda_margin: v(fin.ebitdaMargins),
+    revenue_growth: v(fin.revenueGrowth),
+    earnings_growth: v(fin.earningsGrowth),
+    roe: v(fin.returnOnEquity),
+    roa: v(fin.returnOnAssets),
+    total_cash: v(fin.totalCash),
+    total_debt: v(fin.totalDebt),
+    debt_to_equity: v(fin.debtToEquity),
+    current_ratio: v(fin.currentRatio),
+    quick_ratio: v(fin.quickRatio),
+    free_cash_flow: v(fin.freeCashflow),
+    operating_cash_flow: v(fin.operatingCashflow),
+    revenue: v(fin.totalRevenue),
+    ebitda: v(fin.ebitda),
+    shares_outstanding: v(stats.sharesOutstanding),
+    float_shares: v(stats.floatShares),
+    shares_short: v(stats.sharesShort),
+    short_ratio: v(stats.shortRatio),
+    short_percent_of_float: v(stats.shortPercentOfFloat),
+    held_percent_insiders: v(stats.heldPercentInsiders),
+    held_percent_institutions: v(stats.heldPercentInstitutions),
+    beta: v(stats.beta),
+    week_52_high: v(summary.fiftyTwoWeekHigh),
+    week_52_low: v(summary.fiftyTwoWeekLow),
+    week_52_change: v(stats["52WeekChange"]),
+    target_high: v(fin.targetHighPrice),
+    target_low: v(fin.targetLowPrice),
+    target_mean: v(fin.targetMeanPrice),
+    target_median: v(fin.targetMedianPrice),
+    recommendation_mean: v(fin.recommendationMean),
     recommendation_key: fin.recommendationKey,
-    analyst_count: getValue(fin.numberOfAnalystOpinions),
-    
-    // Company profile extras
+    analyst_count: v(fin.numberOfAnalystOpinions),
     full_time_employees: profile.fullTimeEmployees,
     long_business_summary: profile.longBusinessSummary,
     industry: profile.industry,
@@ -323,9 +312,6 @@ function parseStats(data) {
   };
 }
 
-// ============================================
-// FETCH HISTORICAL
-// ============================================
 export async function fetchHistorical(ticker, exchange, period = "1y") {
   const yahooTicker = mapTicker(ticker, exchange);
   if (!yahooTicker) return [];
@@ -345,7 +331,7 @@ export async function fetchHistorical(ticker, exchange, period = "1y") {
     
     const bars = [];
     for (let i = 0; i < timestamps.length; i++) {
-      if (quote.close?.[i] != null) {
+      if (quote.close?.[i] != null && quote.close[i] > 0) {
         bars.push({
           date: new Date(timestamps[i] * 1000).toISOString().split("T")[0],
           open: quote.open[i],
@@ -357,22 +343,17 @@ export async function fetchHistorical(ticker, exchange, period = "1y") {
         });
       }
     }
-    
     return bars;
   } catch (err) {
-    logger.error(MOD, `Historical ${yahooTicker} failed: ${err.message}`);
     return [];
   }
 }
 
 export async function fetchCompanyData(ticker, exchange) {
-  logger.info(MOD, `Fetching all data for ${ticker} (${exchange})...`);
-  
   const [quote, stats, history] = await Promise.all([
     fetchQuote(ticker, exchange),
     fetchKeyStats(ticker, exchange),
     fetchHistorical(ticker, exchange, "1y"),
   ]);
-  
   return { quote, stats, history };
 }

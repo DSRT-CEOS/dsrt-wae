@@ -31,6 +31,29 @@ export async function GET(request, { params }) {
       .limit(1)
       .maybeSingle();
 
+    // VALIDATE price against most recent chart close
+    if (latestPrice?.price) {
+      const { data: recentBar } = await supabase
+        .from("wae_company_history")
+        .select("close")
+        .eq("ticker", upperTicker)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (recentBar?.close && recentBar.close > 0) {
+        const deviation = Math.abs(latestPrice.price - recentBar.close) / recentBar.close;
+        if (deviation > 0.5) {
+          // Snapshot is corrupt - use chart close instead
+          console.warn(`[API] ${upperTicker} price ${latestPrice.price} differs from chart ${recentBar.close} by ${(deviation * 100).toFixed(0)}%, using chart`);
+          latestPrice.price = recentBar.close;
+          latestPrice.change_amount = null;
+          latestPrice.change_percent = null;
+          latestPrice._corrected = true;
+        }
+      }
+    }
+
     // 3. Financial fundamentals (latest TTM)
     const { data: financials } = await supabase
       .from("wae_company_financials")

@@ -17,18 +17,46 @@ export default function CompanyProfilePage() {
   useEffect(() => {
     async function load(skipRefresh = false) {
       try {
+        // Fire-and-forget refresh (don't block on it)
         if (!skipRefresh) {
-          // Fire and forget: trigger refresh in background
-          fetch(`/api/company/${ticker}/refresh`, { method: "POST" }).catch(() => {});
+          fetch(`/api/company/${ticker}/refresh`, { 
+            method: "POST" 
+          }).catch(() => {});
         }
-        const res = await fetch(`/api/company/${ticker}`);
+        
+        // Fetch main data with retry logic
+        let res;
+        let attempt = 0;
+        const maxAttempts = 3;
+        
+        while (attempt < maxAttempts) {
+          try {
+            res = await fetch(`/api/company/${ticker}`);
+            if (res.ok) break;
+            attempt++;
+            if (attempt < maxAttempts) {
+              await new Promise(r => setTimeout(r, 1000));
+            }
+          } catch (fetchErr) {
+            attempt++;
+            if (attempt >= maxAttempts) throw fetchErr;
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+        
+        if (!res || !res.ok) {
+          throw new Error(`HTTP ${res?.status || "unknown"}`);
+        }
+        
         const json = await res.json();
         if (json.success) {
           setData(json.data);
+          setError(null);
         } else {
-          setError(json.error);
+          setError(json.error || "Unknown error");
         }
       } catch (err) {
+        console.error("Load error:", err);
         setError(err.message);
       } finally {
         setLoading(false);
@@ -36,13 +64,16 @@ export default function CompanyProfilePage() {
     }
     if (ticker) {
       load();
-      // Auto-refresh price every 30 seconds
-      const interval = setInterval(() => {
-        load(false);
-      }, 30000);
+      const interval = setInterval(() => load(false), 30000);
       return () => clearInterval(interval);
     }
   }, [ticker]);
+
+  const formatPrice = (n) => {
+    if (n == null) return "—";
+    if (n >= 1000) return n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    return n.toFixed(2);
+  };
 
   const fmt = {
     money: (n, currency = "USD") => {
@@ -83,8 +114,19 @@ export default function CompanyProfilePage() {
   if (error || !data) {
     return (
       <div style={loadingStyle}>
-        <p>{error || "Company not found"}</p>
-        <button onClick={() => router.push("/")} style={btnStyle}>Back</button>
+        <div style={{ fontSize: "40px", marginBottom: "16px" }}>⚠️</div>
+        <p style={{ marginBottom: "8px" }}>{error || "Company not found"}</p>
+        <p style={{ fontSize: "11px", color: "#64748B", marginBottom: "20px" }}>
+          Ticker: {ticker}
+        </p>
+        <div style={{ display: "flex", gap: "8px", justifyContent: "center" }}>
+          <button onClick={() => window.location.reload()} style={btnStyle}>
+            🔄 Retry
+          </button>
+          <button onClick={() => router.push("/")} style={{ ...btnStyle, backgroundColor: "#1E293B" }}>
+            ← Back to Dashboard
+          </button>
+        </div>
       </div>
     );
   }
@@ -155,7 +197,7 @@ export default function CompanyProfilePage() {
                 {price?.price && (
                   <div style={{ display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" }}>
                     <span style={{ fontSize: "26px", fontWeight: "bold", color: "#F1F5F9" }}>
-                      {fmt.money(price.price, currency).replace(/[A-Z]/g, "")}
+                      {currency === "INR" ? "₹" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency === "JPY" ? "¥" : "$"}{formatPrice(price.price)}
                     </span>
                     <span style={{ fontSize: "14px", color: changeColor, fontWeight: "bold" }}>
                       {changeIcon} {fmt.pct(Math.abs(price.change_percent), 2)}
@@ -200,7 +242,7 @@ export default function CompanyProfilePage() {
             {/* RIGHT — Top Stats */}
             <div style={{ minWidth: "280px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
-                <StatBox label="MARKET CAP" value={fmt.money(price?.market_cap_usd || company.market_cap_usd, "USD")} color="#60A5FA" />
+                <StatBox label="MARKET CAP (USD)" value={fmt.money(price?.market_cap_usd || company.market_cap_usd, "USD")} color="#60A5FA" />
                 <StatBox label="WAE RISK" value={avgImpact ? `${avgImpact.toFixed(1)}/10` : "—"} color={riskColor} />
                 <StatBox label="P/E RATIO" value={fmt.ratio(price?.pe_ratio || financials?.pe_ratio)} />
                 <StatBox label="DIV YIELD" value={fmt.pctMult(price?.dividend_yield)} />
