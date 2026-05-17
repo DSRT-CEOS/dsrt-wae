@@ -8,6 +8,7 @@ export async function GET(request, { params }) {
   const upperTicker = ticker.toUpperCase();
 
   try {
+    // 1. Company basic info
     const { data: company, error } = await supabase
       .from("wae_companies")
       .select("*")
@@ -21,24 +22,53 @@ export async function GET(request, { params }) {
       );
     }
 
-    // Recent events with LLM reasoning
+    // 2. Latest price + key stats (most recent)
+    const { data: latestPrice } = await supabase
+      .from("wae_company_prices")
+      .select("*")
+      .eq("ticker", upperTicker)
+      .order("fetched_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // 3. Financial fundamentals (latest TTM)
+    const { data: financials } = await supabase
+      .from("wae_company_financials")
+      .select("*")
+      .eq("ticker", upperTicker)
+      .order("period_end", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // 4. Ownership data (latest)
+    const { data: ownership } = await supabase
+      .from("wae_company_ownership")
+      .select("*")
+      .eq("ticker", upperTicker)
+      .order("as_of_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // 5. Analyst ratings (latest)
+    const { data: ratings } = await supabase
+      .from("wae_analyst_ratings")
+      .select("*")
+      .eq("ticker", upperTicker)
+      .order("fetched_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // 6. Recent events with LLM reasoning
     const { data: links } = await supabase
       .from("wae_event_company_links")
       .select(`
-        link_strength,
-        link_type,
-        mention_count,
-        impact_score,
-        impact_channels,
-        llm_reasoning,
-        wae_events (
-          id, title, summary, heat_score, category, region,
-          source_name, published_at, ingested_at, url, countries
-        )
+        link_strength, impact_score, impact_channels, llm_reasoning,
+        wae_events (id, title, summary, heat_score, category, region,
+                    source_name, published_at, ingested_at, url, countries)
       `)
       .eq("company_id", company.id)
       .order("impact_score", { ascending: false, nullsLast: true })
-      .limit(50);
+      .limit(30);
 
     const recentEvents = (links || [])
       .filter(l => l.wae_events)
@@ -50,6 +80,7 @@ export async function GET(request, { params }) {
         llm_reasoning: l.llm_reasoning,
       }));
 
+    // 7. Sector peers
     const { data: peers } = await supabase
       .from("wae_companies")
       .select("ticker, name, sector, market_cap_usd, country")
@@ -59,12 +90,41 @@ export async function GET(request, { params }) {
       .order("market_cap_usd", { ascending: false })
       .limit(8);
 
+    // 8. Relationships (supply chain / competitors / subsidiaries)
+    const { data: relationships } = await supabase
+      .from("wae_company_relationships")
+      .select(`
+        relationship_type, strength, description,
+        a:wae_companies!company_a (ticker, name, sector),
+        b:wae_companies!company_b (ticker, name, sector)
+      `)
+      .or(`company_a.eq.${company.id},company_b.eq.${company.id}`)
+      .limit(20);
+
+    const formattedRelations = (relationships || []).map(r => {
+      const isA = r.a?.ticker === upperTicker;
+      const other = isA ? r.b : r.a;
+      return {
+        ticker: other?.ticker,
+        name: other?.name,
+        sector: other?.sector,
+        relationship_type: r.relationship_type,
+        strength: r.strength,
+        description: r.description,
+      };
+    }).filter(r => r.ticker);
+
     return NextResponse.json({
       success: true,
       data: {
         company,
+        price: latestPrice,
+        financials,
+        ownership,
+        ratings,
         recent_events: recentEvents,
         peers: peers || [],
+        relationships: formattedRelations,
       },
       timestamp: new Date().toISOString(),
     });
