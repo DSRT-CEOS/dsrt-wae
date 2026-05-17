@@ -1,8 +1,5 @@
 ﻿// ============================================
-// DSRT WAE — MASTER ENGINE (v1.0)
-// ============================================
-// The orchestrator. Runs the full intelligence cycle.
-// Called every 30 min by cron.
+// DSRT WAE — MASTER ENGINE (v2.0)
 // ============================================
 
 import config from "./config.js";
@@ -15,6 +12,7 @@ import { deduplicate } from "../modules/processing/deduplicator.js";
 import { classify } from "../modules/processing/classifier.js";
 import { scoreHeat } from "../modules/processing/heat-scorer.js";
 import { generateBriefing } from "../modules/processing/summarizer.js";
+import { linkEvents } from "../modules/processing/linker.js";
 
 import { 
   insertEvents, 
@@ -24,29 +22,24 @@ import {
 
 const MOD = "ENGINE";
 
-// ── SOURCE REGISTRY ──
-// Add new sources here when built
 const SOURCES = [
   { name: "rss-global", fn: fetchRSS },
   { name: "gdelt", fn: fetchGDELT },
 ];
 
-// ── MAIN CYCLE FUNCTION ──
 export async function runCycle() {
   const cycleId = `cycle_${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const startTime = Date.now();
   const errors = [];
 
   logger.divider();
-  logger.info(MOD, `🚀 Starting cycle: ${cycleId}`);
+  logger.info(MOD, `Starting cycle: ${cycleId}`);
   logger.divider();
 
-  // Track cycle in DB
   await createCycle(cycleId);
 
-  // ═══ PHASE 1: INGEST ═══
+  // PHASE 1: INGEST
   logger.info(MOD, "PHASE 1: Ingesting from sources...");
-  
   const rawEvents = [];
   const sourcesHit = [];
 
@@ -65,7 +58,6 @@ export async function runCycle() {
 
   logger.info(MOD, `Phase 1 done: ${rawEvents.length} raw events from ${sourcesHit.length} sources`);
 
-  // Early exit if no events
   if (rawEvents.length === 0) {
     logger.warn(MOD, "No events collected. Ending cycle.");
     await completeCycle(cycleId, {
@@ -80,41 +72,54 @@ export async function runCycle() {
     return { success: true, events: 0 };
   }
 
-  // ═══ PHASE 2: DEDUPLICATE ═══
+  // PHASE 2: DEDUPLICATE
   logger.info(MOD, "PHASE 2: Deduplicating...");
   const uniqueEvents = deduplicate(rawEvents);
 
-  // ═══ PHASE 3: CLASSIFY ═══
+  // PHASE 3: CLASSIFY
   logger.info(MOD, "PHASE 3: Classifying...");
   const classifiedEvents = classify(uniqueEvents);
 
-  // ═══ PHASE 4: HEAT SCORE ═══
+  // PHASE 4: HEAT SCORE
   logger.info(MOD, "PHASE 4: Scoring heat...");
   const scoredEvents = scoreHeat(classifiedEvents);
 
-  // ═══ PHASE 5: ADD CYCLE METADATA ═══
+  // PHASE 5: CYCLE METADATA
   const finalEvents = scoredEvents.map((event) => ({
     ...event,
     cycle_id: cycleId,
     ingested_at: new Date().toISOString(),
   }));
 
-  // ═══ PHASE 6: STORE IN DATABASE ═══
+  // PHASE 6: STORE
   logger.info(MOD, "PHASE 5: Storing in database...");
   const stored = await insertEvents(finalEvents);
 
-  // ═══ PHASE 7: AI BRIEFING ═══
-  logger.info(MOD, "PHASE 6: Generating AI briefing...");
+  // PHASE 7: LINK TO COMPANIES (NEW in V2)
+  logger.info(MOD, "PHASE 6: Linking events to companies...");
+  let linkStats = { linked: 0, totalLinks: 0 };
+  
+  if (stored && stored.length > 0) {
+    try {
+      linkStats = await linkEvents(stored);
+      logger.info(MOD, `  Created ${linkStats.totalLinks} company links across ${linkStats.linked} events`);
+    } catch (err) {
+      logger.error(MOD, `Linking failed: ${err.message}`);
+      errors.push(`linker: ${err.message}`);
+    }
+  }
+
+  // PHASE 8: AI BRIEFING
+  logger.info(MOD, "PHASE 7: Generating AI briefing...");
   const briefing = await generateBriefing(scoredEvents);
 
-  // ═══ PHASE 8: CALCULATE METRICS ═══
+  // PHASE 9: METRICS
   const globalHeat = scoredEvents.length > 0
     ? Math.round(
         (scoredEvents.reduce((sum, e) => sum + e.heat_score, 0) / scoredEvents.length) * 10
       ) / 10
     : 0;
 
-  // ═══ COMPLETE CYCLE ═══
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
 
   await completeCycle(cycleId, {
@@ -128,10 +133,10 @@ export async function runCycle() {
   });
 
   logger.divider();
-  logger.info(MOD, `✅ Cycle complete in ${duration}s`);
-  logger.info(MOD, `   Raw: ${rawEvents.length} → Unique: ${uniqueEvents.length} → Stored: ${stored?.length || 0}`);
+  logger.info(MOD, `Cycle complete in ${duration}s`);
+  logger.info(MOD, `   Raw: ${rawEvents.length} -> Unique: ${uniqueEvents.length} -> Stored: ${stored?.length || 0}`);
+  logger.info(MOD, `   Company Links: ${linkStats.totalLinks} across ${linkStats.linked} events`);
   logger.info(MOD, `   Global Heat: ${globalHeat}/10`);
-  logger.info(MOD, `   AI Briefing: ${briefing.substring(0, 80)}...`);
   logger.divider();
 
   return {
@@ -142,6 +147,8 @@ export async function runCycle() {
       rawEvents: rawEvents.length,
       uniqueEvents: uniqueEvents.length,
       storedEvents: stored?.length || 0,
+      companyLinks: linkStats.totalLinks,
+      linkedEvents: linkStats.linked,
       globalHeat,
       sourcesHit,
       errors,

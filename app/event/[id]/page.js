@@ -11,10 +11,10 @@ export default function EventDetailPage() {
   const [event, setEvent] = useState(null);
   const [related, setRelated] = useState([]);
   const [cluster, setCluster] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [enrichment, setEnrichment] = useState(null);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
-  const [reEnrichClicked, setReEnrichClicked] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -25,9 +25,9 @@ export default function EventDetailPage() {
           setEvent(json.data.event);
           setRelated(json.data.related || []);
           setCluster(json.data.cluster || []);
+          setCompanies(json.data.companies || []);
 
           const evt = json.data.event;
-          // Detect old broken format (JSON array as string)
           const isOldFormat = evt.why_it_matters && 
                               typeof evt.why_it_matters === 'string' &&
                               (evt.why_it_matters.startsWith('[') || 
@@ -41,7 +41,6 @@ export default function EventDetailPage() {
               ai_analysis: evt.ai_analysis,
             });
           } else {
-            // Auto re-enrich if no data or old broken format
             triggerEnrich();
           }
         }
@@ -56,7 +55,6 @@ export default function EventDetailPage() {
 
   async function triggerEnrich() {
     setEnriching(true);
-    setReEnrichClicked(true);
     try {
       const res = await fetch(`/api/event/${eventId}/enrich`, { method: "POST" });
       const json = await res.json();
@@ -84,6 +82,21 @@ export default function EventDetailPage() {
     return "STABLE";
   };
 
+  const getStrengthColor = (s) => {
+    if (s >= 0.9) return "#FF3B3B";
+    if (s >= 0.7) return "#FF8C42";
+    if (s >= 0.5) return "#FCD34D";
+    return "#60A5FA";
+  };
+
+  const formatMarketCap = (usd) => {
+    if (!usd) return "—";
+    if (usd >= 1e12) return `$${(usd / 1e12).toFixed(2)}T`;
+    if (usd >= 1e9) return `$${(usd / 1e9).toFixed(1)}B`;
+    if (usd >= 1e6) return `$${(usd / 1e6).toFixed(0)}M`;
+    return `$${usd}`;
+  };
+
   const formatDate = (d) => {
     if (!d) return "";
     return new Date(d).toLocaleString("en-IN", {
@@ -92,19 +105,13 @@ export default function EventDetailPage() {
     });
   };
 
-  // Parse structured text: split by double newlines, render each as block
   const renderStructuredText = (text) => {
     if (!text || typeof text !== 'string') return null;
-    
-    // Clean any leftover JSON syntax
     let cleaned = text.replace(/^\[|\]$/g, '').trim();
-    
     const blocks = cleaned.split(/\n\n+/).filter(b => b.trim());
     
     return blocks.map((block, i) => {
       const trimmed = block.trim();
-      
-      // Check if it has a label (UPPERCASE: content)
       const labelMatch = trimmed.match(/^([A-Z][A-Z\s\d()]+):\s*(.+)/s);
       
       if (labelMatch) {
@@ -119,35 +126,23 @@ export default function EventDetailPage() {
             borderRadius: "0 6px 6px 0",
           }}>
             <div style={{
-              fontSize: "10px",
-              letterSpacing: "2px",
-              color: "#4ADE80",
-              fontWeight: "bold",
+              fontSize: "10px", letterSpacing: "2px",
+              color: "#4ADE80", fontWeight: "bold",
               marginBottom: "6px",
-            }}>
-              {label.trim()}
-            </div>
+            }}>{label.trim()}</div>
             <div style={{
-              fontSize: "13.5px",
-              lineHeight: "1.7",
+              fontSize: "13.5px", lineHeight: "1.7",
               color: "#CBD5E1",
-            }}>
-              {content.trim()}
-            </div>
+            }}>{content.trim()}</div>
           </div>
         );
       }
       
-      // Plain paragraph
       return (
         <p key={i} style={{
-          fontSize: "13.5px",
-          lineHeight: "1.7",
-          color: "#CBD5E1",
-          marginBottom: "12px",
-        }}>
-          {trimmed}
-        </p>
+          fontSize: "13.5px", lineHeight: "1.7",
+          color: "#CBD5E1", marginBottom: "12px",
+        }}>{trimmed}</p>
       );
     });
   };
@@ -174,26 +169,16 @@ export default function EventDetailPage() {
   const heatLabel = getHeatLabel(event.heat_score);
 
   return (
-    <div style={{ 
-      minHeight: "100vh", 
-      backgroundColor: "#030712", 
-      color: "#E2E8F0", 
-      fontFamily: "'Courier New', monospace",
-    }}>
+    <div style={{ minHeight: "100vh", backgroundColor: "#030712", color: "#E2E8F0", fontFamily: "'Courier New', monospace" }}>
 
-      {/* HEADER */}
       <header style={headerStyle}>
-        <button onClick={() => router.push("/")} style={backBtn}>
-          ← BACK
-        </button>
-
+        <button onClick={() => router.push("/")} style={backBtn}>← BACK</button>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <span style={{ fontSize: "20px" }}>🌍</span>
           <span style={{ letterSpacing: "2px", fontSize: "14px", fontWeight: "bold" }}>
             DSRT <span style={{ color: "#3B82F6" }}>WAE</span>
           </span>
         </div>
-
         <div style={{ display: "flex", gap: "6px" }}>
           <button style={btnSmall}>SAVE</button>
           <button style={btnSmall}>ALERT</button>
@@ -201,67 +186,36 @@ export default function EventDetailPage() {
         </div>
       </header>
 
-      {/* MAIN */}
       <main style={{ maxWidth: "1000px", margin: "0 auto", padding: "30px 24px" }}>
 
-        {/* HERO: Heat + Meta */}
+        {/* HERO */}
         <div style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "20px",
-          marginBottom: "24px",
-          padding: "20px",
+          display: "flex", alignItems: "flex-start", gap: "20px",
+          marginBottom: "24px", padding: "20px",
           backgroundColor: `${heatColor}0D`,
           border: `1px solid ${heatColor}33`,
           borderLeft: `5px solid ${heatColor}`,
           borderRadius: "0 8px 8px 0",
         }}>
-          <div style={{
-            minWidth: "80px",
-            textAlign: "center",
-          }}>
-            <div style={{
-              fontSize: "42px",
-              fontWeight: "bold",
-              color: heatColor,
-              lineHeight: 1,
-            }}>{event.heat_score}</div>
-            <div style={{
-              fontSize: "9px",
-              letterSpacing: "2px",
-              color: heatColor,
-              fontWeight: "bold",
-              marginTop: "6px",
-            }}>{heatLabel}</div>
-            <div style={{
-              fontSize: "8px",
-              letterSpacing: "1px",
-              color: "#64748B",
-              marginTop: "2px",
-            }}>HEAT SCORE</div>
+          <div style={{ minWidth: "80px", textAlign: "center" }}>
+            <div style={{ fontSize: "42px", fontWeight: "bold", color: heatColor, lineHeight: 1 }}>
+              {event.heat_score}
+            </div>
+            <div style={{ fontSize: "9px", letterSpacing: "2px", color: heatColor, fontWeight: "bold", marginTop: "6px" }}>
+              {heatLabel}
+            </div>
+            <div style={{ fontSize: "8px", letterSpacing: "1px", color: "#64748B", marginTop: "2px" }}>
+              HEAT SCORE
+            </div>
           </div>
 
           <div style={{ flex: 1 }}>
-            <div style={{
-              fontSize: "10px",
-              letterSpacing: "1.5px",
-              color: "#64748B",
-              marginBottom: "8px",
-              textTransform: "uppercase",
-            }}>
+            <div style={{ fontSize: "10px", letterSpacing: "1.5px", color: "#64748B", marginBottom: "8px", textTransform: "uppercase" }}>
               {event.category?.replace(/_/g, " ")} | {event.region} | {formatDate(event.published_at || event.ingested_at)}
             </div>
-            
-            <h1 style={{
-              fontSize: "24px",
-              lineHeight: "1.35",
-              color: "#F1F5F9",
-              fontWeight: "bold",
-              margin: "0 0 12px 0",
-            }}>
+            <h1 style={{ fontSize: "24px", lineHeight: "1.35", color: "#F1F5F9", fontWeight: "bold", margin: "0 0 12px 0" }}>
               {event.title}
             </h1>
-
             <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
               {event.countries?.slice(0, 5).map((c) => (
                 <span key={c} style={countryTag}>{c}</span>
@@ -273,39 +227,22 @@ export default function EventDetailPage() {
           </div>
         </div>
 
-        {/* AI EXECUTIVE SUMMARY */}
+        {/* AI SUMMARY */}
         <section style={sectionBox}>
           <div style={sectionHeader}>
             <span style={sectionDot}>●</span>
             <h2 style={sectionTitle}>AI EXECUTIVE SUMMARY</h2>
-            {enrichment && (
-              <span style={badgeReady}>READY</span>
-            )}
+            {enrichment && <span style={badgeReady}>READY</span>}
           </div>
-          
           {enriching && (
             <div style={loadingBox}>
-              <div style={{ 
-                width: "16px", 
-                height: "16px", 
-                border: "2px solid #1E293B",
-                borderTopColor: "#4ADE80",
-                borderRadius: "50%",
-                animation: "spin 1s linear infinite",
-                display: "inline-block",
-                marginRight: "10px",
-                verticalAlign: "middle",
-              }} />
+              <div style={{ width: "16px", height: "16px", border: "2px solid #1E293B", borderTopColor: "#4ADE80", borderRadius: "50%", animation: "spin 1s linear infinite", display: "inline-block", marginRight: "10px", verticalAlign: "middle" }} />
               Analyzing event with LLaMA 3... (15-25 seconds)
             </div>
           )}
-          
           {enrichment?.ai_summary && !enriching && (
-            <p style={summaryText}>
-              {enrichment.ai_summary}
-            </p>
+            <p style={summaryText}>{enrichment.ai_summary}</p>
           )}
-          
           {!enrichment && !enriching && (
             <p style={{ color: "#64748B", fontSize: "13px", fontStyle: "italic" }}>
               {event.summary || "No summary available."}
@@ -313,7 +250,6 @@ export default function EventDetailPage() {
           )}
         </section>
 
-        {/* WHY THIS MATTERS */}
         {enrichment?.why_it_matters && (
           <section style={sectionBox}>
             <div style={sectionHeader}>
@@ -324,7 +260,6 @@ export default function EventDetailPage() {
           </section>
         )}
 
-        {/* WHAT HAPPENS NEXT */}
         {enrichment?.what_happens_next && (
           <section style={sectionBox}>
             <div style={sectionHeader}>
@@ -336,57 +271,141 @@ export default function EventDetailPage() {
           </section>
         )}
 
-        {/* STRATEGIC ANALYSIS */}
         {enrichment?.ai_analysis && (
           <section style={sectionBox}>
             <div style={sectionHeader}>
               <span style={sectionDot}>●</span>
               <h2 style={sectionTitle}>STRATEGIC ANALYSIS</h2>
             </div>
-            <p style={analysisText}>
-              {enrichment.ai_analysis}
-            </p>
+            <p style={analysisText}>{enrichment.ai_analysis}</p>
           </section>
         )}
 
-        {/* RE-ENRICH BUTTON (if old format) */}
-        {!reEnrichClicked && enrichment && (
-          <div style={{ textAlign: "center", marginBottom: "24px" }}>
-            <button onClick={triggerEnrich} style={{
-              padding: "8px 16px",
-              backgroundColor: "transparent",
-              border: "1px solid #334155",
-              color: "#64748B",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "11px",
-              fontFamily: "inherit",
-            }}>
-              🔄 Regenerate AI Analysis
-            </button>
-          </div>
-        )}
-
-        {/* AFFECTED COMPANIES PLACEHOLDER */}
+        {/* === NEW: AFFECTED COMPANIES === */}
         <section style={sectionBox}>
           <div style={sectionHeader}>
             <span style={sectionDot}>●</span>
             <h2 style={sectionTitle}>AFFECTED COMPANIES</h2>
-            <span style={badgeSoon}>V2.1</span>
+            {companies.length > 0 && (
+              <span style={{ ...badgeReady, marginLeft: "auto" }}>
+                {companies.length} DETECTED
+              </span>
+            )}
           </div>
-          <div style={{
-            padding: "30px 20px",
-            textAlign: "center",
-            color: "#475569",
-            fontSize: "13px",
-            border: "1px dashed #1E293B",
-            borderRadius: "6px",
-          }}>
-            <div style={{ fontSize: "32px", marginBottom: "8px", opacity: 0.5 }}>💼</div>
-            <div>Company impact analysis</div>
-            <div style={{ fontSize: "11px", marginTop: "6px", color: "#334155" }}>
-              Coming in MOD-021 — will show which companies are affected with exposure scores
+          
+          {companies.length === 0 ? (
+            <div style={{
+              padding: "30px 20px",
+              textAlign: "center",
+              color: "#475569",
+              fontSize: "13px",
+              border: "1px dashed #1E293B",
+              borderRadius: "6px",
+            }}>
+              <div style={{ fontSize: "32px", marginBottom: "8px", opacity: 0.5 }}>🔍</div>
+              <div>No companies detected in this event</div>
+              <div style={{ fontSize: "11px", marginTop: "6px", color: "#334155" }}>
+                Event analyzed against 88 tracked companies
+              </div>
             </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {companies.slice(0, 10).map((c) => {
+                const strColor = getStrengthColor(c.link_strength);
+                const strPct = Math.round(c.link_strength * 100);
+                return (
+                  <div
+                    key={c.id}
+                    onClick={() => router.push(`/company/${c.ticker}`)}
+                    style={{
+                      padding: "14px 16px",
+                      backgroundColor: "rgba(10, 17, 32, 0.6)",
+                      border: "1px solid #1E293B",
+                      borderLeft: `3px solid ${strColor}`,
+                      borderRadius: "0 6px 6px 0",
+                      cursor: "pointer",
+                      transition: "all 0.15s",
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = "#111827";
+                      e.currentTarget.style.transform = "translateX(3px)";
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = "rgba(10, 17, 32, 0.6)";
+                      e.currentTarget.style.transform = "translateX(0)";
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                          <span style={{
+                            fontSize: "13px",
+                            fontWeight: "bold",
+                            color: "#F1F5F9",
+                          }}>{c.ticker}</span>
+                          <span style={{
+                            fontSize: "11px",
+                            color: "#94A3B8",
+                          }}>{c.name}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: "10px", fontSize: "10px", color: "#64748B" }}>
+                          <span>{c.sector}</span>
+                          <span>|</span>
+                          <span>{c.country}</span>
+                          <span>|</span>
+                          <span>Cap: {formatMarketCap(c.market_cap_usd)}</span>
+                          {c.mention_count > 1 && (
+                            <>
+                              <span>|</span>
+                              <span style={{ color: "#4ADE80" }}>
+                                {c.mention_count}x mentioned
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        {c.matched_alias && (
+                          <div style={{ fontSize: "9px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
+                            Matched: "{c.matched_alias}" 
+                            {c.mentioned_in && c.mentioned_in.length > 0 && (
+                              <span> in {c.mentioned_in.join(", ")}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: "center", minWidth: "60px" }}>
+                        <div style={{
+                          fontSize: "18px",
+                          fontWeight: "bold",
+                          color: strColor,
+                          lineHeight: 1,
+                        }}>{strPct}%</div>
+                        <div style={{ fontSize: "8px", color: "#475569", marginTop: "2px", letterSpacing: "1px" }}>
+                          RELEVANCE
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {companies.length > 10 && (
+                <div style={{ textAlign: "center", fontSize: "11px", color: "#64748B", marginTop: "4px" }}>
+                  + {companies.length - 10} more companies
+                </div>
+              )}
+            </div>
+          )}
+          
+          <div style={{
+            marginTop: "12px",
+            padding: "8px 12px",
+            fontSize: "10px",
+            color: "#475569",
+            backgroundColor: "rgba(15, 23, 42, 0.4)",
+            borderRadius: "4px",
+            textAlign: "center",
+            fontStyle: "italic",
+          }}>
+            Impact scores coming in MOD-021 — for now showing detection relevance
           </div>
         </section>
 
@@ -423,44 +442,27 @@ export default function EventDetailPage() {
                     e.currentTarget.style.transform = "translateX(0)";
                   }}
                 >
-                  <div style={{ 
-                    display: "flex", 
-                    justifyContent: "space-between", 
-                    alignItems: "center", 
-                    marginBottom: "4px",
-                  }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
                     <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                      <span style={{ 
-                        fontSize: "13px", 
-                        color: getHeatColor(r.heat_score), 
-                        fontWeight: "bold",
-                      }}>
+                      <span style={{ fontSize: "13px", color: getHeatColor(r.heat_score), fontWeight: "bold" }}>
                         {r.heat_score}
                       </span>
-                      <span style={{ 
-                        fontSize: "9px", 
-                        color: "#64748B", 
-                        letterSpacing: "1px",
-                        textTransform: "uppercase",
-                      }}>
+                      <span style={{ fontSize: "9px", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase" }}>
                         {r.category?.replace(/_/g, " ")}
                       </span>
                     </div>
                     <span style={{ fontSize: "10px", color: "#475569" }}>{r.source_name}</span>
                   </div>
-                  <p style={{ 
-                    fontSize: "13px", 
-                    color: "#E2E8F0", 
-                    margin: 0,
-                    lineHeight: "1.4",
-                  }}>{r.title}</p>
+                  <p style={{ fontSize: "13px", color: "#E2E8F0", margin: 0, lineHeight: "1.4" }}>
+                    {r.title}
+                  </p>
                 </div>
               ))}
             </div>
           </section>
         )}
 
-        {/* ORIGINAL SOURCE */}
+        {/* SOURCE LINK */}
         <section style={sectionBox}>
           <div style={sectionHeader}>
             <span style={sectionDot}>●</span>
@@ -468,17 +470,10 @@ export default function EventDetailPage() {
           </div>
           {event.url ? (
             <a href={event.url} target="_blank" rel="noreferrer" style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "10px 16px",
-              backgroundColor: "#1E3A8A",
-              color: "white",
-              textDecoration: "none",
-              borderRadius: "6px",
-              fontSize: "12px",
-              fontWeight: "bold",
-              letterSpacing: "1px",
+              display: "inline-flex", alignItems: "center", gap: "8px",
+              padding: "10px 16px", backgroundColor: "#1E3A8A",
+              color: "white", textDecoration: "none", borderRadius: "6px",
+              fontSize: "12px", fontWeight: "bold", letterSpacing: "1px",
               transition: "background 0.2s",
             }}
             onMouseOver={(e) => e.currentTarget.style.backgroundColor = "#2563EB"}
@@ -494,13 +489,9 @@ export default function EventDetailPage() {
       </main>
 
       <footer style={{
-        borderTop: "1px solid #1E293B",
-        padding: "24px",
-        textAlign: "center",
-        color: "#334155",
-        fontSize: "10px",
-        marginTop: "40px",
-        letterSpacing: "1px",
+        borderTop: "1px solid #1E293B", padding: "24px",
+        textAlign: "center", color: "#334155", fontSize: "10px",
+        marginTop: "40px", letterSpacing: "1px",
       }}>
         DSRT WAE • Event Intelligence • LLaMA 3 via Groq • ID {event.id?.substring(0, 8)}
       </footer>
@@ -515,174 +506,19 @@ export default function EventDetailPage() {
   );
 }
 
-// === STYLES ===
-const loadingStyle = {
-  minHeight: "100vh",
-  backgroundColor: "#030712",
-  color: "#E2E8F0",
-  padding: "40px",
-  textAlign: "center",
-  fontFamily: "'Courier New', monospace",
-  paddingTop: "120px",
-};
-
-const btnStyle = {
-  marginTop: "20px",
-  padding: "10px 20px",
-  backgroundColor: "#3B82F6",
-  border: "none",
-  color: "white",
-  borderRadius: "6px",
-  cursor: "pointer",
-};
-
-const headerStyle = {
-  position: "sticky",
-  top: 0,
-  backgroundColor: "rgba(15, 23, 42, 0.95)",
-  backdropFilter: "blur(8px)",
-  borderBottom: "1px solid #1E293B",
-  padding: "12px 24px",
-  zIndex: 50,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-};
-
-const backBtn = {
-  background: "transparent",
-  border: "1px solid #334155",
-  color: "#94A3B8",
-  padding: "6px 14px",
-  borderRadius: "4px",
-  cursor: "pointer",
-  fontSize: "11px",
-  fontFamily: "inherit",
-  letterSpacing: "1px",
-};
-
-const btnSmall = {
-  padding: "5px 10px",
-  backgroundColor: "#0F172A",
-  border: "1px solid #334155",
-  color: "#94A3B8",
-  borderRadius: "4px",
-  cursor: "pointer",
-  fontSize: "10px",
-  fontFamily: "inherit",
-  letterSpacing: "1px",
-};
-
-const sectionBox = {
-  marginBottom: "20px",
-  padding: "20px 22px",
-  backgroundColor: "#0a1120",
-  border: "1px solid #1E293B",
-  borderRadius: "8px",
-};
-
-const sectionHeader = {
-  display: "flex",
-  alignItems: "center",
-  gap: "8px",
-  marginBottom: "16px",
-  paddingBottom: "10px",
-  borderBottom: "1px solid #1E293B",
-};
-
-const sectionDot = {
-  color: "#4ADE80",
-  fontSize: "10px",
-};
-
-const sectionTitle = {
-  fontSize: "11px",
-  letterSpacing: "3px",
-  color: "#4ADE80",
-  margin: 0,
-  fontWeight: "bold",
-};
-
-const badgeReady = {
-  marginLeft: "auto",
-  fontSize: "9px",
-  padding: "2px 8px",
-  backgroundColor: "rgba(74, 222, 128, 0.15)",
-  color: "#4ADE80",
-  borderRadius: "3px",
-  border: "1px solid rgba(74, 222, 128, 0.3)",
-  letterSpacing: "1px",
-  fontWeight: "bold",
-};
-
-const badgePredict = {
-  marginLeft: "auto",
-  fontSize: "9px",
-  padding: "2px 8px",
-  backgroundColor: "rgba(168, 85, 247, 0.15)",
-  color: "#C084FC",
-  borderRadius: "3px",
-  border: "1px solid rgba(168, 85, 247, 0.3)",
-  letterSpacing: "1px",
-  fontWeight: "bold",
-};
-
-const badgeSoon = {
-  marginLeft: "auto",
-  fontSize: "9px",
-  padding: "2px 8px",
-  backgroundColor: "rgba(100, 116, 139, 0.15)",
-  color: "#64748B",
-  borderRadius: "3px",
-  border: "1px solid rgba(100, 116, 139, 0.3)",
-  letterSpacing: "1px",
-  fontWeight: "bold",
-};
-
-const loadingBox = {
-  padding: "16px",
-  color: "#64748B",
-  fontSize: "13px",
-  fontStyle: "italic",
-  backgroundColor: "rgba(15, 23, 42, 0.5)",
-  border: "1px solid #1E293B",
-  borderRadius: "6px",
-};
-
-const summaryText = {
-  fontSize: "15px",
-  lineHeight: "1.7",
-  color: "#F1F5F9",
-  margin: 0,
-  fontWeight: "400",
-};
-
-const analysisText = {
-  fontSize: "13.5px",
-  lineHeight: "1.8",
-  color: "#CBD5E1",
-  margin: 0,
-};
-
-const countryTag = {
-  display: "inline-block",
-  padding: "3px 10px",
-  fontSize: "10px",
-  backgroundColor: "rgba(59, 130, 246, 0.1)",
-  color: "#60A5FA",
-  border: "1px solid rgba(59, 130, 246, 0.3)",
-  borderRadius: "3px",
-  letterSpacing: "1px",
-  fontWeight: "bold",
-};
-
-const sourceTag = {
-  display: "inline-block",
-  padding: "3px 10px",
-  fontSize: "10px",
-  backgroundColor: "rgba(100, 116, 139, 0.1)",
-  color: "#94A3B8",
-  border: "1px solid rgba(100, 116, 139, 0.3)",
-  borderRadius: "3px",
-  letterSpacing: "1px",
-};
+const loadingStyle = { minHeight: "100vh", backgroundColor: "#030712", color: "#E2E8F0", padding: "40px", textAlign: "center", fontFamily: "'Courier New', monospace", paddingTop: "120px" };
+const btnStyle = { marginTop: "20px", padding: "10px 20px", backgroundColor: "#3B82F6", border: "none", color: "white", borderRadius: "6px", cursor: "pointer" };
+const headerStyle = { position: "sticky", top: 0, backgroundColor: "rgba(15, 23, 42, 0.95)", backdropFilter: "blur(8px)", borderBottom: "1px solid #1E293B", padding: "12px 24px", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "space-between" };
+const backBtn = { background: "transparent", border: "1px solid #334155", color: "#94A3B8", padding: "6px 14px", borderRadius: "4px", cursor: "pointer", fontSize: "11px", fontFamily: "inherit", letterSpacing: "1px" };
+const btnSmall = { padding: "5px 10px", backgroundColor: "#0F172A", border: "1px solid #334155", color: "#94A3B8", borderRadius: "4px", cursor: "pointer", fontSize: "10px", fontFamily: "inherit", letterSpacing: "1px" };
+const sectionBox = { marginBottom: "20px", padding: "20px 22px", backgroundColor: "#0a1120", border: "1px solid #1E293B", borderRadius: "8px" };
+const sectionHeader = { display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px", paddingBottom: "10px", borderBottom: "1px solid #1E293B" };
+const sectionDot = { color: "#4ADE80", fontSize: "10px" };
+const sectionTitle = { fontSize: "11px", letterSpacing: "3px", color: "#4ADE80", margin: 0, fontWeight: "bold" };
+const badgeReady = { marginLeft: "auto", fontSize: "9px", padding: "2px 8px", backgroundColor: "rgba(74, 222, 128, 0.15)", color: "#4ADE80", borderRadius: "3px", border: "1px solid rgba(74, 222, 128, 0.3)", letterSpacing: "1px", fontWeight: "bold" };
+const badgePredict = { marginLeft: "auto", fontSize: "9px", padding: "2px 8px", backgroundColor: "rgba(168, 85, 247, 0.15)", color: "#C084FC", borderRadius: "3px", border: "1px solid rgba(168, 85, 247, 0.3)", letterSpacing: "1px", fontWeight: "bold" };
+const loadingBox = { padding: "16px", color: "#64748B", fontSize: "13px", fontStyle: "italic", backgroundColor: "rgba(15, 23, 42, 0.5)", border: "1px solid #1E293B", borderRadius: "6px" };
+const summaryText = { fontSize: "15px", lineHeight: "1.7", color: "#F1F5F9", margin: 0, fontWeight: "400" };
+const analysisText = { fontSize: "13.5px", lineHeight: "1.8", color: "#CBD5E1", margin: 0 };
+const countryTag = { display: "inline-block", padding: "3px 10px", fontSize: "10px", backgroundColor: "rgba(59, 130, 246, 0.1)", color: "#60A5FA", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "3px", letterSpacing: "1px", fontWeight: "bold" };
+const sourceTag = { display: "inline-block", padding: "3px 10px", fontSize: "10px", backgroundColor: "rgba(100, 116, 139, 0.1)", color: "#94A3B8", border: "1px solid rgba(100, 116, 139, 0.3)", borderRadius: "3px", letterSpacing: "1px" };

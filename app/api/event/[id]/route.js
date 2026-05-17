@@ -1,6 +1,6 @@
 ﻿// ============================================
-// API: /api/event/[id]
-// Returns: Single event + related events + cluster
+// API: /api/event/[id]  (v2.1)
+// Returns: Single event + related + cluster + COMPANIES
 // ============================================
 
 import { NextResponse } from "next/server";
@@ -12,6 +12,7 @@ export async function GET(request, { params }) {
   const { id } = params;
 
   try {
+    // 1. Get event
     const { data: event, error: eventError } = await supabase
       .from("wae_events")
       .select("*")
@@ -25,6 +26,7 @@ export async function GET(request, { params }) {
       );
     }
 
+    // 2. Get related events
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: related } = await supabase
       .from("wae_events")
@@ -35,6 +37,7 @@ export async function GET(request, { params }) {
       .order("heat_score", { ascending: false })
       .limit(10);
 
+    // 3. Get source cluster
     let cluster = [];
     if (event.source_cluster_id) {
       const { data: clusterEvents } = await supabase
@@ -46,6 +49,40 @@ export async function GET(request, { params }) {
       cluster = clusterEvents || [];
     }
 
+    // 4. NEW: Get affected companies for this event
+    const { data: companyLinks } = await supabase
+      .from("wae_event_company_links")
+      .select(`
+        link_strength,
+        link_type,
+        matched_alias,
+        mention_count,
+        mentioned_in,
+        impact_score,
+        impact_channels,
+        wae_companies (
+          id, ticker, name, sector, industry,
+          country, market_cap_usd, ceo, headquarters_city,
+          website, employees
+        )
+      `)
+      .eq("event_id", id)
+      .order("link_strength", { ascending: false });
+
+    const companies = (companyLinks || [])
+      .filter(l => l.wae_companies)
+      .map(l => ({
+        ...l.wae_companies,
+        link_strength: l.link_strength,
+        link_type: l.link_type,
+        matched_alias: l.matched_alias,
+        mention_count: l.mention_count,
+        mentioned_in: l.mentioned_in,
+        impact_score: l.impact_score,
+        impact_channels: l.impact_channels,
+      }));
+
+    // Fire-and-forget view counter
     supabase
       .from("wae_events")
       .update({ view_count: (event.view_count || 0) + 1 })
@@ -58,6 +95,7 @@ export async function GET(request, { params }) {
         event,
         related: related || [],
         cluster,
+        companies,
       },
       timestamp: new Date().toISOString(),
     });
