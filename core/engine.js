@@ -1,4 +1,9 @@
-﻿import config from "./config.js";
+﻿// ============================================
+// DSRT WAE — MASTER ENGINE v2.1
+// Faster — linking moved to separate cron
+// ============================================
+
+import config from "./config.js";
 import logger from "./logger.js";
 
 import { fetchEvents as fetchGDELT } from "../modules/sources/gdelt.js";
@@ -8,7 +13,6 @@ import { deduplicate } from "../modules/processing/deduplicator.js";
 import { classify } from "../modules/processing/classifier.js";
 import { scoreHeat } from "../modules/processing/heat-scorer.js";
 import { generateBriefing } from "../modules/processing/summarizer.js";
-import { linkEvents } from "../modules/processing/linker.js";
 
 import { 
   insertEvents, 
@@ -47,32 +51,25 @@ export async function runCycle() {
       logger.info(MOD, `  ${source.name}: ${events.length} events`);
     } catch (err) {
       errors.push(`${source.name}: ${err.message}`);
-      logger.error(MOD, `Source failed: ${err.message}`);
     }
   }
 
   if (rawEvents.length === 0) {
-    logger.warn(MOD, "No events collected. Ending cycle.");
     await completeCycle(cycleId, {
       events_ingested: 0,
       events_after_dedup: 0,
       events_processed: 0,
       sources_hit: sourcesHit,
       errors,
-      ai_briefing: "No events collected this cycle.",
+      ai_briefing: "No events collected.",
       global_heat_score: 0,
     });
     return { success: true, events: 0 };
   }
 
-  // PHASE 2-4: Process
-  logger.info(MOD, "PHASE 2: Deduplicating...");
+  // PHASE 2-4: Process (fast operations)
   const uniqueEvents = deduplicate(rawEvents);
-
-  logger.info(MOD, "PHASE 3: Classifying...");
   const classifiedEvents = classify(uniqueEvents);
-
-  logger.info(MOD, "PHASE 4: Scoring heat...");
   const scoredEvents = scoreHeat(classifiedEvents);
 
   // PHASE 5: Store
@@ -82,33 +79,9 @@ export async function runCycle() {
     ingested_at: new Date().toISOString(),
   }));
 
-  logger.info(MOD, "PHASE 5: Storing in database...");
   const stored = await insertEvents(finalEvents);
 
-  // PHASE 6: Link companies (only for HIGH HEAT new events to save LLM calls)
-  logger.info(MOD, "PHASE 6: Linking companies (high-impact events only)...");
-  let linkStats = { linked: 0, totalLinks: 0 };
-  
-  if (stored && stored.length > 0) {
-    // Only link events with heat >= 6 (saves LLM rate limit budget)
-    const highImpactEvents = stored.filter(e => (e.heat_score || 0) >= 6);
-    
-    if (highImpactEvents.length > 0) {
-      logger.info(MOD, `  Linking ${highImpactEvents.length} high-impact events (heat >= 6)`);
-      try {
-        linkStats = await linkEvents(highImpactEvents);
-        logger.info(MOD, `  Created ${linkStats.totalLinks} company links`);
-      } catch (err) {
-        logger.error(MOD, `Linking failed: ${err.message}`);
-        errors.push(`linker: ${err.message}`);
-      }
-    } else {
-      logger.info(MOD, "  No high-impact events to link this cycle");
-    }
-  }
-
-  // PHASE 7: AI Briefing
-  logger.info(MOD, "PHASE 7: Generating AI briefing...");
+  // PHASE 6: AI Briefing (only 1 LLM call, fast)
   const briefing = await generateBriefing(scoredEvents);
 
   // Metrics
@@ -133,7 +106,6 @@ export async function runCycle() {
   logger.divider();
   logger.info(MOD, `Cycle complete in ${duration}s`);
   logger.info(MOD, `   Raw: ${rawEvents.length} -> Unique: ${uniqueEvents.length} -> Stored: ${stored?.length || 0}`);
-  logger.info(MOD, `   Company Links: ${linkStats.totalLinks} across ${linkStats.linked} high-impact events`);
   logger.info(MOD, `   Global Heat: ${globalHeat}/10`);
   logger.divider();
 
@@ -145,8 +117,6 @@ export async function runCycle() {
       rawEvents: rawEvents.length,
       uniqueEvents: uniqueEvents.length,
       storedEvents: stored?.length || 0,
-      companyLinks: linkStats.totalLinks,
-      linkedEvents: linkStats.linked,
       globalHeat,
       sourcesHit,
       errors,

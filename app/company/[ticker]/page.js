@@ -15,8 +15,12 @@ export default function CompanyProfilePage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    async function load() {
+    async function load(skipRefresh = false) {
       try {
+        if (!skipRefresh) {
+          // Fire and forget: trigger refresh in background
+          fetch(`/api/company/${ticker}/refresh`, { method: "POST" }).catch(() => {});
+        }
         const res = await fetch(`/api/company/${ticker}`);
         const json = await res.json();
         if (json.success) {
@@ -30,7 +34,14 @@ export default function CompanyProfilePage() {
         setLoading(false);
       }
     }
-    if (ticker) load();
+    if (ticker) {
+      load();
+      // Auto-refresh price every 30 seconds
+      const interval = setInterval(() => {
+        load(false);
+      }, 30000);
+      return () => clearInterval(interval);
+    }
   }, [ticker]);
 
   const fmt = {
@@ -47,6 +58,14 @@ export default function CompanyProfilePage() {
     pct: (n, dec = 2) => n == null ? "—" : `${n.toFixed(dec)}%`,
     pctMult: (n, dec = 2) => n == null ? "—" : `${(n * 100).toFixed(dec)}%`,
     ratio: (n) => n == null ? "—" : n.toFixed(2),
+    timeAgo: (date) => {
+      if (!date) return "never";
+      const mins = Math.floor((Date.now() - new Date(date).getTime()) / 60000);
+      if (mins < 1) return "just now";
+      if (mins < 60) return mins + "m ago";
+      if (mins < 1440) return Math.floor(mins / 60) + "h ago";
+      return Math.floor(mins / 1440) + "d ago";
+    },
   };
 
   const getHeatColor = (s) => {
@@ -134,7 +153,7 @@ export default function CompanyProfilePage() {
                   {company.ticker}
                 </h1>
                 {price?.price && (
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" }}>
                     <span style={{ fontSize: "26px", fontWeight: "bold", color: "#F1F5F9" }}>
                       {fmt.money(price.price, currency).replace(/[A-Z]/g, "")}
                     </span>
@@ -144,6 +163,19 @@ export default function CompanyProfilePage() {
                     <span style={{ fontSize: "12px", color: changeColor }}>
                       ({fmt.money(price.change_amount, currency)})
                     </span>
+                    {price?.fetched_at && (
+                      <span style={{ 
+                        fontSize: "10px", 
+                        color: "#64748B",
+                        padding: "2px 8px",
+                        backgroundColor: "rgba(74, 222, 128, 0.1)",
+                        border: "1px solid rgba(74, 222, 128, 0.3)",
+                        borderRadius: "3px",
+                        letterSpacing: "1px"
+                      }}>
+                        ● LIVE · {fmt.timeAgo(price.fetched_at)}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
