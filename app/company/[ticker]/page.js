@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import PriceChart from "../../components/PriceChart";
+import WatchlistButton from "../../components/WatchlistButton";
 
 export default function CompanyProfilePage() {
   const params = useParams();
@@ -166,7 +167,7 @@ export default function CompanyProfilePage() {
           </span>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          <button style={btnSmall}>+ WATCHLIST</button>
+          <WatchlistButton ticker={company.ticker} size="default" />
           <button style={btnSmall}>🔔 ALERT</button>
           <button style={btnSmall}>📥 EXPORT</button>
         </div>

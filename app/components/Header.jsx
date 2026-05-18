@@ -86,13 +86,55 @@ export default function Header({ lastRefresh, status, onRefresh }) {
             ↻ REFRESH
           </button>
 
+          <a 
+            href="/global"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              padding: "4px 10px",
+              backgroundColor: "rgba(59, 130, 246, 0.1)",
+              border: "1px solid #3B82F644",
+              color: "#60A5FA",
+              borderRadius: "4px",
+              textDecoration: "none",
+              fontSize: "10px",
+              letterSpacing: "1px",
+              fontFamily: "inherit",
+              fontWeight: "bold",
+            }}
+          >
+            🌐 DSRT GLOBAL
+          </a>
+          
+          <a 
+            href="/watchlist"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              padding: "4px 10px",
+              backgroundColor: "rgba(252, 211, 77, 0.1)",
+              border: "1px solid #FCD34D44",
+              color: "#FCD34D",
+              borderRadius: "4px",
+              textDecoration: "none",
+              fontSize: "10px",
+              letterSpacing: "1px",
+              fontFamily: "inherit",
+              fontWeight: "bold",
+            }}
+          >
+            ⭐ WATCHLIST
+          </a>
+          
           <span style={{ 
             color: "#475569", fontSize: "10px",
             padding: "3px 8px",
             border: "1px solid #1E293B",
             borderRadius: "3px",
           }}>
-            v2.0
+            v2.1
           </span>
         </div>
       </div>
