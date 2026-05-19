@@ -10,20 +10,26 @@ export default function ArticlePage() {
   
   const [article, setArticle] = useState(null);
   const [related, setRelated] = useState([]);
+  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch(`/api/global/articles?slug=${slug}`);
-        const json = await res.json();
-        if (json.success) {
-          setArticle(json.data.article);
-          setRelated(json.data.related || []);
+        const [aRes, sRes] = await Promise.all([
+          fetch(`/api/global/articles?slug=${slug}`),
+          fetch("/api/global/stats"),
+        ]);
+        const aJson = await aRes.json();
+        const sJson = await sRes.json();
+        if (aJson.success) {
+          setArticle(aJson.data.article);
+          setRelated(aJson.data.related || []);
         } else {
-          setError(json.error);
+          setError(aJson.error);
         }
+        if (sJson.success) setStats(sJson.data);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -34,24 +40,14 @@ export default function ArticlePage() {
   }, [slug]);
 
   if (loading) {
-    return (
-      <div style={{ minHeight: "100vh", backgroundColor: "#0a0e1a", color: "#9CA3AF", padding: "100px 20px", textAlign: "center", fontFamily: "'Inter', sans-serif" }}>
-        Loading article...
-      </div>
-    );
+    return <div style={loadingStyle}>Loading article...</div>;
   }
-
   if (error || !article) {
     return (
-      <div style={{ minHeight: "100vh", backgroundColor: "#0a0e1a", color: "#9CA3AF", padding: "100px 20px", textAlign: "center", fontFamily: "'Inter', sans-serif" }}>
+      <div style={loadingStyle}>
         <div style={{ fontSize: "32px", marginBottom: "16px" }}>📰</div>
         <p>{error || "Article not found"}</p>
-        <button 
-          onClick={() => router.push("/global")} 
-          style={{ marginTop: "20px", padding: "10px 20px", backgroundColor: "#3B82F6", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}
-        >
-          ← Back to DSRT Global
-        </button>
+        <button onClick={() => router.push("/global")} style={btnStyle}>← Back to DSRT Global</button>
       </div>
     );
   }
@@ -66,25 +62,23 @@ export default function ArticlePage() {
 
   const agentLabel = (id) => {
     const map = {
-      editorial: "Editorial",
-      geopolitik: "The Geopolitik",
-      macro_mike: "Macro Mike",
-      energy_hawk: "Energy Hawk",
-      tech_skeptic: "Tech Skeptic",
-      bharat_beat: "Bharat Beat",
-      climate_watch: "Climate Watch",
-      crypto_sage: "Crypto Sage",
+      editorial: "Editorial", geopolitik: "The Geopolitik",
+      macro_mike: "Macro Mike", energy_hawk: "Energy Hawk",
+      tech_skeptic: "Tech Skeptic", bharat_beat: "Bharat Beat",
+      climate_watch: "Climate Watch", crypto_sage: "Crypto Sage",
     };
     return map[id] || "DSRT Global";
   };
 
-  // Convert markdown to simple HTML (lightweight)
+  // Determine "heat" of this article from triggering event or category
+  const articleHeat = stats?.regional_heat?.[article.region] || 5;
+  const heatColor = articleHeat >= 8 ? "#EF4444" : articleHeat >= 6 ? "#F59E0B" : articleHeat >= 4 ? "#FBBF24" : "#60A5FA";
+
+  // Render body markdown
   const renderBody = (md) => {
     if (!md) return null;
-    
     const lines = md.split("\n");
     const elements = [];
-    let inList = false;
     let listItems = [];
     
     const flushList = () => {
@@ -98,88 +92,42 @@ export default function ArticlePage() {
         );
         listItems = [];
       }
-      inList = false;
     };
     
     lines.forEach((line, i) => {
       const trimmed = line.trim();
-      if (!trimmed) {
-        flushList();
-        return;
-      }
-      
-      // H2
+      if (!trimmed) { flushList(); return; }
       if (trimmed.startsWith("## ")) {
         flushList();
-        elements.push(
-          <h2 key={i} style={{ 
-            fontSize: "22px", 
-            fontWeight: "700", 
-            color: "#FFFFFF", 
-            marginTop: "32px", 
-            marginBottom: "16px",
-            lineHeight: "1.3",
-          }}>
-            {trimmed.replace(/^##\s+/, "")}
-          </h2>
-        );
+        elements.push(<h2 key={i} style={{ fontSize: "22px", fontWeight: "700", color: "#FFFFFF", marginTop: "32px", marginBottom: "16px", lineHeight: "1.3" }}>{trimmed.replace(/^##\s+/, "")}</h2>);
         return;
       }
-      
-      // H3
       if (trimmed.startsWith("### ")) {
         flushList();
-        elements.push(
-          <h3 key={i} style={{ 
-            fontSize: "18px", 
-            fontWeight: "600", 
-            color: "#FFFFFF", 
-            marginTop: "24px", 
-            marginBottom: "12px",
-          }}>
-            {trimmed.replace(/^###\s+/, "")}
-          </h3>
-        );
+        elements.push(<h3 key={i} style={{ fontSize: "18px", fontWeight: "600", color: "#FFFFFF", marginTop: "24px", marginBottom: "12px" }}>{trimmed.replace(/^###\s+/, "")}</h3>);
         return;
       }
-      
-      // List item
       if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-        inList = true;
         listItems.push(trimmed.replace(/^[-*]\s+/, ""));
         return;
       }
-      
-      // Paragraph
       flushList();
-      // Handle bold **text**
       const withBold = trimmed.split(/(\*\*[^*]+\*\*)/).map((part, j) => {
         if (part.startsWith("**") && part.endsWith("**")) {
           return <strong key={j} style={{ color: "#FFFFFF", fontWeight: "600" }}>{part.slice(2, -2)}</strong>;
         }
         return part;
       });
-      
-      elements.push(
-        <p key={i} style={{ 
-          fontSize: "16px", 
-          lineHeight: "1.75", 
-          color: "#D1D5DB", 
-          marginBottom: "20px",
-        }}>
-          {withBold}
-        </p>
-      );
+      elements.push(<p key={i} style={{ fontSize: "16px", lineHeight: "1.75", color: "#D1D5DB", marginBottom: "20px" }}>{withBold}</p>);
     });
-    
     flushList();
     return elements;
   };
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#0a0e1a", color: "#E8EAED", fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ minHeight: "100vh", backgroundColor: "#0a0e1a", color: "#E8EAED", fontFamily: "'Inter', sans-serif" }}>
 
-      {/* TOP NAV */}
+      {/* NAV */}
       <header style={{
         position: "sticky", top: 0, zIndex: 100,
         backgroundColor: "rgba(10, 14, 26, 0.95)",
@@ -187,225 +135,270 @@ export default function ArticlePage() {
         borderBottom: "1px solid #1F2937",
         padding: "16px 24px",
       }}>
-        <div style={{ maxWidth: "1400px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "16px" }}>
+        <div style={{ maxWidth: "1400px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", cursor: "pointer" }} onClick={() => router.push("/global")}>
             <span style={{ fontSize: "24px" }}>🌐</span>
-            <div>
-              <div style={{ fontSize: "16px", fontWeight: "700", letterSpacing: "1px", color: "#FFFFFF" }}>
-                DSRT <span style={{ color: "#3B82F6" }}>GLOBAL</span>
-              </div>
+            <div style={{ fontSize: "16px", fontWeight: "700", letterSpacing: "1px", color: "#FFFFFF" }}>
+              DSRT <span style={{ color: "#3B82F6" }}>GLOBAL</span>
             </div>
           </div>
           <nav style={{ display: "flex", gap: "20px", fontSize: "13px" }}>
-            <a href="/global" style={{ color: "#D1D5DB", textDecoration: "none", fontWeight: "500" }}>← All Articles</a>
-            <a href="/global/brief" style={{ color: "#D1D5DB", textDecoration: "none", fontWeight: "500" }}>The Brief</a>
-            <a href="/" style={{ color: "#3B82F6", textDecoration: "none", fontWeight: "500" }}>DSRT WAE ↗</a>
+            <a href="/global" style={navLink}>← All Articles</a>
+            <a href="/global/brief" style={navLink}>The Brief</a>
+            <a href="/global/dashboard" style={navLink}>Dashboard</a>
+            <a href="/" style={{ ...navLink, color: "#3B82F6" }}>WAE ↗</a>
           </nav>
         </div>
       </header>
 
-      {/* ARTICLE */}
-      <article style={{ maxWidth: "780px", margin: "0 auto", padding: "48px 24px" }}>
+      {/* ARTICLE WITH SIDE PANEL */}
+      <div style={{ maxWidth: "1280px", margin: "0 auto", padding: "48px 24px", display: "grid", gridTemplateColumns: "1fr 320px", gap: "48px" }} className="article-layout">
         
-        {/* Meta */}
-        <div style={{ display: "flex", gap: "10px", marginBottom: "20px", flexWrap: "wrap" }}>
-          <span style={categoryBadge(article.category)}>{article.category}</span>
-          {article.article_type === "breaking" && <span style={breakingBadge}>● BREAKING</span>}
-          <span style={metaBadge}>{article.reading_time_minutes || 3} min read</span>
-        </div>
-
-        {/* Title */}
-        <h1 style={{ 
-          fontSize: "42px", 
-          fontWeight: "800", 
-          color: "#FFFFFF", 
-          lineHeight: "1.15", 
-          marginBottom: "20px",
-          letterSpacing: "-0.5px",
-        }}>
-          {article.title}
-        </h1>
-
-        {/* Subtitle */}
-        {article.subtitle && (
-          <p style={{ 
-            fontSize: "22px", 
-            color: "#9CA3AF", 
-            lineHeight: "1.4", 
-            marginBottom: "32px",
-            fontWeight: "400",
-          }}>
-            {article.subtitle}
-          </p>
-        )}
-
-        {/* Byline */}
-        <div style={{ 
-          display: "flex", 
-          alignItems: "center", 
-          gap: "16px", 
-          paddingTop: "20px",
-          paddingBottom: "32px",
-          borderTop: "1px solid #1F2937",
-          borderBottom: "1px solid #1F2937",
-          marginBottom: "32px",
-          fontSize: "13px",
-          color: "#9CA3AF",
-        }}>
-          <div style={{
-            width: "40px",
-            height: "40px",
-            borderRadius: "50%",
-            backgroundColor: "#3B82F6",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "white",
-            fontSize: "16px",
-            fontWeight: "700",
-          }}>
-            {agentLabel(article.agent_persona).charAt(0)}
+        {/* MAIN ARTICLE */}
+        <article>
+          {/* Meta */}
+          <div style={{ display: "flex", gap: "10px", marginBottom: "20px", flexWrap: "wrap" }}>
+            <span style={categoryBadge(article.category)}>{article.category}</span>
+            {article.article_type === "breaking" && <span style={breakingBadge}>● BREAKING</span>}
+            <span style={metaBadge}>{article.reading_time_minutes || 3} min read</span>
           </div>
-          <div>
-            <div style={{ color: "#FFFFFF", fontWeight: "600", marginBottom: "2px" }}>
-              By {agentLabel(article.agent_persona)}
+
+          <h1 style={{ fontSize: "42px", fontWeight: "800", color: "#FFFFFF", lineHeight: "1.15", marginBottom: "20px", letterSpacing: "-0.5px" }}>
+            {article.title}
+          </h1>
+
+          {article.subtitle && (
+            <p style={{ fontSize: "22px", color: "#9CA3AF", lineHeight: "1.4", marginBottom: "32px", fontWeight: "400" }}>
+              {article.subtitle}
+            </p>
+          )}
+
+          {/* Byline */}
+          <div style={{ display: "flex", alignItems: "center", gap: "16px", paddingTop: "20px", paddingBottom: "32px", borderTop: "1px solid #1F2937", borderBottom: "1px solid #1F2937", marginBottom: "32px", fontSize: "13px", color: "#9CA3AF" }}>
+            <div style={{ width: "40px", height: "40px", borderRadius: "50%", backgroundColor: "#3B82F6", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: "16px", fontWeight: "700" }}>
+              {agentLabel(article.agent_persona).charAt(0)}
             </div>
-            <div style={{ fontSize: "12px" }}>
-              {fmtDate(article.published_at)}
-              {article.region && ` · ${article.region}`}
-              {article.countries && article.countries.length > 0 && ` · ${article.countries.slice(0, 3).join(", ")}`}
+            <div>
+              <div style={{ color: "#FFFFFF", fontWeight: "600", marginBottom: "2px" }}>
+                By {agentLabel(article.agent_persona)}
+              </div>
+              <div style={{ fontSize: "12px" }}>
+                {fmtDate(article.published_at)}
+                {article.region && ` · 📍 ${article.region}`}
+                {article.countries && article.countries.length > 0 && ` · ${article.countries.slice(0, 3).join(", ")}`}
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Lead */}
-        {article.lead_paragraph && (
-          <p style={{ 
-            fontSize: "20px", 
-            lineHeight: "1.6", 
-            color: "#FFFFFF", 
-            marginBottom: "32px",
-            fontWeight: "400",
-            paddingLeft: "16px",
-            borderLeft: "3px solid #3B82F6",
-          }}>
-            {article.lead_paragraph}
-          </p>
-        )}
+          {/* Lead */}
+          {article.lead_paragraph && (
+            <p style={{ fontSize: "20px", lineHeight: "1.6", color: "#FFFFFF", marginBottom: "32px", fontWeight: "400", paddingLeft: "16px", borderLeft: "3px solid #3B82F6" }}>
+              {article.lead_paragraph}
+            </p>
+          )}
 
-        {/* Body */}
-        <div style={{ fontSize: "16px", lineHeight: "1.75", color: "#D1D5DB" }}>
-          {renderBody(article.body_markdown)}
-        </div>
+          {/* Body */}
+          <div>{renderBody(article.body_markdown)}</div>
 
-        {/* Tags */}
-        {article.tags && article.tags.length > 0 && (
-          <div style={{ marginTop: "40px", paddingTop: "24px", borderTop: "1px solid #1F2937" }}>
-            <div style={{ fontSize: "11px", letterSpacing: "1.5px", color: "#6B7280", marginBottom: "12px", textTransform: "uppercase", fontWeight: "600" }}>
-              Tagged
+          {/* Tags */}
+          {article.tags && article.tags.length > 0 && (
+            <div style={{ marginTop: "40px", paddingTop: "24px", borderTop: "1px solid #1F2937" }}>
+              <div style={{ fontSize: "11px", letterSpacing: "1.5px", color: "#6B7280", marginBottom: "12px", textTransform: "uppercase", fontWeight: "600" }}>
+                Tagged
+              </div>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {article.tags.map(tag => (
+                  <span key={tag} style={{ padding: "5px 12px", backgroundColor: "#1F2937", color: "#9CA3AF", borderRadius: "20px", fontSize: "12px" }}>
+                    #{tag}
+                  </span>
+                ))}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-              {article.tags.map(tag => (
-                <span key={tag} style={{
-                  padding: "5px 12px",
-                  backgroundColor: "#1F2937",
-                  color: "#9CA3AF",
-                  borderRadius: "20px",
-                  fontSize: "12px",
-                }}>
-                  #{tag}
-                </span>
-              ))}
-            </div>
+          )}
+
+          {/* AI Disclosure */}
+          <div style={{ marginTop: "40px", padding: "20px", backgroundColor: "#111827", border: "1px solid #1F2937", borderRadius: "8px", fontSize: "12px", color: "#6B7280", lineHeight: "1.6" }}>
+            <strong style={{ color: "#9CA3AF" }}>About this article:</strong> Generated by DSRT WAE's AI intelligence engine. For informational purposes only. <a href="/" style={{ color: "#3B82F6", textDecoration: "none" }}>How DSRT WAE works →</a>
           </div>
-        )}
+        </article>
 
-        {/* AI Disclosure */}
-        <div style={{
-          marginTop: "40px",
-          padding: "20px",
-          backgroundColor: "#111827",
-          border: "1px solid #1F2937",
-          borderRadius: "8px",
-          fontSize: "12px",
-          color: "#6B7280",
-          lineHeight: "1.6",
-        }}>
-          <strong style={{ color: "#9CA3AF" }}>About this article:</strong> Generated by DSRT WAE's AI intelligence engine. Reviewed for quality and accuracy. For informational purposes only — not financial advice. <a href="/" style={{ color: "#3B82F6", textDecoration: "none" }}>Learn how DSRT WAE works →</a>
-        </div>
-
-      </article>
-
-      {/* RELATED ARTICLES */}
-      {related.length > 0 && (
-        <section style={{ borderTop: "1px solid #1F2937", padding: "48px 24px", backgroundColor: "#0F1623" }}>
-          <div style={{ maxWidth: "1400px", margin: "0 auto" }}>
-            <h2 style={{ fontSize: "20px", fontWeight: "700", color: "#FFFFFF", marginBottom: "24px" }}>
-              More from {article.category}
-            </h2>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
-              {related.map(r => (
-                <div
-                  key={r.slug}
-                  onClick={() => router.push(`/global/article/${r.slug}`)}
-                  style={{
-                    padding: "20px",
-                    backgroundColor: "#111827",
-                    border: "1px solid #1F2937",
-                    borderRadius: "10px",
-                    cursor: "pointer",
-                    transition: "all 0.2s",
-                  }}
-                  onMouseOver={(e) => e.currentTarget.style.borderColor = "#3B82F6"}
-                  onMouseOut={(e) => e.currentTarget.style.borderColor = "#1F2937"}
-                >
-                  <h3 style={{ fontSize: "16px", fontWeight: "600", color: "#FFFFFF", marginBottom: "8px", lineHeight: "1.4" }}>
-                    {r.title}
-                  </h3>
-                  {r.summary_short && (
-                    <p style={{ fontSize: "13px", color: "#9CA3AF", lineHeight: "1.5", marginBottom: "12px" }}>
-                      {r.summary_short}
-                    </p>
-                  )}
-                  <div style={{ fontSize: "11px", color: "#6B7280" }}>
-                    {r.reading_time_minutes || 3} min read
-                  </div>
+        {/* SIDE PANEL — VISUALIZATIONS */}
+        <aside style={{ position: "sticky", top: "100px", alignSelf: "start", display: "flex", flexDirection: "column", gap: "20px" }} className="article-sidebar">
+          
+          {/* Regional Heat Indicator */}
+          {article.region && (
+            <div style={sidePanel}>
+              <div style={panelTitle}>📍 {article.region}</div>
+              <div style={{ marginTop: "16px", textAlign: "center" }}>
+                <div style={{ fontSize: "10px", color: "#6B7280", letterSpacing: "1.5px", marginBottom: "8px", textTransform: "uppercase", fontWeight: "600" }}>
+                  Regional Heat
                 </div>
-              ))}
+                <div style={{ fontSize: "48px", fontWeight: "800", color: heatColor, lineHeight: 1 }}>
+                  {articleHeat.toFixed(1)}
+                </div>
+                <div style={{ fontSize: "11px", color: heatColor, marginTop: "6px", fontWeight: "700", letterSpacing: "1px" }}>
+                  ● {articleHeat >= 8 ? "CRITICAL" : articleHeat >= 6 ? "HIGH" : articleHeat >= 4 ? "ELEVATED" : "MODERATE"}
+                </div>
+                <div style={{ fontSize: "10px", color: "#6B7280", marginTop: "8px" }}>
+                  Last 24 hours
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Countries Affected */}
+          {article.countries && article.countries.length > 0 && (
+            <div style={sidePanel}>
+              <div style={panelTitle}>🌍 Countries</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "12px" }}>
+                {article.countries.map(c => (
+                  <span key={c} style={{
+                    padding: "6px 10px",
+                    backgroundColor: "rgba(59, 130, 246, 0.1)",
+                    border: "1px solid rgba(59, 130, 246, 0.3)",
+                    color: "#60A5FA",
+                    borderRadius: "4px",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                  }}>
+                    {c}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Article Stats */}
+          <div style={sidePanel}>
+            <div style={panelTitle}>📊 Article Stats</div>
+            <div style={{ marginTop: "16px" }}>
+              <StatRow label="Reading Time" value={`${article.reading_time_minutes || 3} min`} />
+              <StatRow label="Word Count" value={(article.body_markdown?.split(/\s+/).length || 0).toString()} />
+              <StatRow label="Views" value={(article.view_count || 0).toString()} />
+              <StatRow label="Category" value={article.category} />
+              <StatRow label="AI Confidence" value={`${Math.round((article.confidence_score || 0.8) * 100)}%`} color="#4ADE80" />
+              <StatRow label="Quality Score" value={`${article.quality_score || 8}/10`} color="#60A5FA" />
             </div>
           </div>
-        </section>
-      )}
 
-      {/* FOOTER */}
+          {/* Related Articles Mini */}
+          {related.length > 0 && (
+            <div style={sidePanel}>
+              <div style={panelTitle}>📰 Related</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "12px" }}>
+                {related.slice(0, 3).map(r => (
+                  <div 
+                    key={r.slug}
+                    onClick={() => router.push(`/global/article/${r.slug}`)}
+                    style={{
+                      cursor: "pointer",
+                      padding: "12px",
+                      backgroundColor: "#0a0e1a",
+                      borderRadius: "6px",
+                      borderLeft: "3px solid #3B82F6",
+                      transition: "all 0.15s",
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = "#1F2937"}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = "#0a0e1a"}
+                  >
+                    <div style={{ fontSize: "13px", color: "#FFFFFF", fontWeight: "600", lineHeight: "1.4", marginBottom: "4px" }}>
+                      {r.title}
+                    </div>
+                    <div style={{ fontSize: "10px", color: "#6B7280" }}>
+                      {r.reading_time_minutes || 3} min · {r.category}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* CTA */}
+          <div style={{ ...sidePanel, background: "linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(168, 85, 247, 0.1))", borderColor: "#3B82F6" }}>
+            <div style={{ fontSize: "13px", color: "#FFFFFF", fontWeight: "700", marginBottom: "8px" }}>
+              Get Daily Intelligence
+            </div>
+            <div style={{ fontSize: "11px", color: "#9CA3AF", marginBottom: "12px", lineHeight: "1.5" }}>
+              5 things to know about the world, every morning.
+            </div>
+            <button 
+              onClick={() => router.push("/global")}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "#3B82F6",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "12px",
+                fontWeight: "700",
+                cursor: "pointer",
+                letterSpacing: "0.5px",
+              }}
+            >
+              SUBSCRIBE FREE
+            </button>
+          </div>
+        </aside>
+      </div>
+
       <footer style={{ borderTop: "1px solid #1F2937", padding: "32px 24px", backgroundColor: "#0F1623" }}>
         <div style={{ maxWidth: "1400px", margin: "0 auto", textAlign: "center", color: "#6B7280", fontSize: "12px" }}>
-          DSRT GLOBAL · Powered by DSRT WAE · <a href="/" style={{ color: "#3B82F6", textDecoration: "none" }}>Visit DSRT WAE Terminal →</a>
+          DSRT GLOBAL · Powered by DSRT WAE · <a href="/" style={{ color: "#3B82F6", textDecoration: "none" }}>WAE Terminal →</a>
         </div>
       </footer>
+
+      <style>{`
+        @media (max-width: 1024px) {
+          .article-layout { grid-template-columns: 1fr !important; }
+          .article-sidebar { position: static !important; }
+        }
+      `}</style>
     </div>
   );
 }
 
-const metaBadge = {
+function StatRow({ label, value, color }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #1F2937", fontSize: "12px" }}>
+      <span style={{ color: "#9CA3AF", textTransform: "capitalize" }}>{label}</span>
+      <span style={{ color: color || "#FFFFFF", fontWeight: "600" }}>{value}</span>
+    </div>
+  );
+}
+
+const navLink = { color: "#D1D5DB", textDecoration: "none", fontSize: "13px", fontWeight: "500" };
+const loadingStyle = { minHeight: "100vh", backgroundColor: "#0a0e1a", color: "#9CA3AF", padding: "100px 20px", textAlign: "center", fontFamily: "'Inter', sans-serif" };
+const btnStyle = { marginTop: "20px", padding: "10px 20px", backgroundColor: "#3B82F6", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" };
+
+const sidePanel = {
+  padding: "20px",
+  backgroundColor: "#111827",
+  border: "1px solid #1F2937",
+  borderRadius: "10px",
+};
+
+const panelTitle = {
   fontSize: "11px",
-  padding: "3px 10px",
-  backgroundColor: "rgba(107, 114, 128, 0.15)",
-  color: "#9CA3AF",
-  borderRadius: "4px",
-  fontWeight: "500",
-  letterSpacing: "0.3px",
+  letterSpacing: "1.5px",
+  color: "#6B7280",
+  textTransform: "uppercase",
+  fontWeight: "700",
+  paddingBottom: "10px",
+  borderBottom: "1px solid #1F2937",
+};
+
+const metaBadge = {
+  fontSize: "11px", padding: "3px 10px",
+  backgroundColor: "rgba(107, 114, 128, 0.15)", color: "#9CA3AF",
+  borderRadius: "4px", fontWeight: "500",
 };
 
 const breakingBadge = {
-  fontSize: "11px",
-  padding: "3px 10px",
-  backgroundColor: "rgba(239, 68, 68, 0.15)",
-  color: "#F87171",
+  fontSize: "11px", padding: "3px 10px",
+  backgroundColor: "rgba(239, 68, 68, 0.15)", color: "#F87171",
   border: "1px solid rgba(239, 68, 68, 0.3)",
-  borderRadius: "4px",
-  fontWeight: "700",
-  letterSpacing: "0.5px",
+  borderRadius: "4px", fontWeight: "700", letterSpacing: "0.5px",
 };
 
 function categoryBadge(cat) {
@@ -420,14 +413,10 @@ function categoryBadge(cat) {
   };
   const c = colors[cat] || colors.economy;
   return {
-    fontSize: "11px",
-    padding: "4px 12px",
-    backgroundColor: c.bg,
-    color: c.color,
+    fontSize: "11px", padding: "4px 12px",
+    backgroundColor: c.bg, color: c.color,
     border: `1px solid ${c.border}`,
-    borderRadius: "4px",
-    fontWeight: "700",
-    letterSpacing: "0.8px",
-    textTransform: "uppercase",
+    borderRadius: "4px", fontWeight: "700",
+    letterSpacing: "0.8px", textTransform: "uppercase",
   };
 }
